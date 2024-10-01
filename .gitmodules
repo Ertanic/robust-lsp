@@ -1,0 +1,3 @@
+[submodule "examples/space-station-14"]
+	path = examples/space-station-14
+	url = https://github.com/space-wizards/space-station-14.git

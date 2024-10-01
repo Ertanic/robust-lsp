@@ -21,11 +21,14 @@
   "main": "./out/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "rd /s /q out && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
   },
   "devDependencies": {
     "@types/vscode": "^1.93.0",

@@ -18,7 +18,8 @@
 			],
 			"preLaunchTask": {
 				"type": "npm",
-				"script": "watch"
+				"script": "compile",
+				"path": "clients/code",
 			},
 			"env": {
 				"LSP_SERVER_PATH": "${workspaceRoot}/target/debug/robust-lsp"

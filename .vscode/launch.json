@@ -10,20 +10,47 @@
 			"type": "extensionHost",
 			"request": "launch",
 			"args": [
+				"--disable-extensions",
 				"--extensionDevelopmentPath=${workspaceFolder}/clients/code/",
-				"--workspaceFolder=${workspaceFolder}/examples/space-station-14"
+				"--workspaceFolder=${workspaceFolder}/examples/space-station-14",
 			],
 			"outFiles": [
 				"${workspaceFolder}/clients/code/out/**/*.js"
 			],
-			"preLaunchTask": {
-				"type": "npm",
-				"script": "compile",
-				"path": "clients/code",
-			},
+			"preLaunchTask": "npm compile",
 			"env": {
 				"LSP_SERVER_PATH": "${workspaceRoot}/target/debug/robust-lsp"
 			}
+		},
+		{
+			"name": "Attach To Server",
+			"type": "lldb",
+			"request": "attach",
+			"pid": "${input:pickServerProcess}",
+			"program": "${workspaceFolder}/target/debug/robust-lsp",
+			"sourceLanguages": [
+				"rust"
+			],
+			"preLaunchTask": "cargo build"
 		}
-	]
+	],
+	"compounds": [
+		{
+			"name": "Client + Server",
+			"configurations": [
+				"Run VS Code",
+				"Attach To Server",
+			]
+		}
+	],
+	"inputs": [
+    {
+      "id": "pickServerProcess",
+      "type": "command",
+      "command": "lldb.pickProcess",
+      "args": {
+        "filter": ".*robust-lsp" // RegExp to filter processes to.
+      }
+    }
+  ]
 }

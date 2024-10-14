@@ -6,6 +6,7 @@
   "repository": {
     "url": "https://github.com/Ertanic/robust-lsp"
   },
+  "publisher": "ertanic",
   "author": {
     "name": "Ertanic"
   },

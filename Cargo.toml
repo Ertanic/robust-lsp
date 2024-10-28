@@ -12,6 +12,7 @@ tracing-subscriber = { version = "0.3.18", features = ["tracing"] }
 tree-sitter = "0.23.0"
 tree-sitter-c-sharp = "0.23.0"
 tree-sitter-yaml = "0.6.1"
+walkdir = "2.5.0"
 
 [build-dependencies]
 cc = "1.1.23"

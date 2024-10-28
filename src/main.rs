@@ -14,6 +14,7 @@ async fn main() {
         .compact()
         .with_ansi(false)
         .without_time()
+        .with_line_number(true)
         .with_file(true)
         .with_writer(io::stderr)
         .with_thread_ids(true);

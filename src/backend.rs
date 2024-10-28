@@ -1,8 +1,8 @@
 use ropey::Rope;
 use tracing::instrument;
+use tree_sitter::Tree;
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    collections::{HashMap, HashSet}, path::PathBuf, sync::{Arc, RwLock}
 };
 use tower_lsp::{
     jsonrpc::{Error, Result},
@@ -14,12 +14,16 @@ use tower_lsp::{
     Client, LanguageServer,
 };
 
-use crate::{parse::csharp::CsharpClass, utils::check_project_compliance};
+use crate::{parse::{csharp::CsharpClass, parse_project}, utils::check_project_compliance};
+
+pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
+pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
 
 pub(crate) struct Backend {
     client: Client,
     opened_files: RwLock<HashMap<Url, Rope>>,
-    prototypes: Arc<RwLock<HashSet<CsharpClass>>>,
+    parsed_files: ParsedFiles,
+    prototypes: CsharpClasses,
 }
 
 impl Backend {
@@ -27,7 +31,8 @@ impl Backend {
         Self {
             client,
             opened_files: Default::default(),
-            prototypes: Arc::new(Default::default()),
+            parsed_files: ParsedFiles::default(),
+            prototypes: CsharpClasses::default(),
         }
     }
 }
@@ -39,7 +44,11 @@ impl LanguageServer for Backend {
             return Err(Error::request_cancelled());
         }
 
-        
+        tracing::info!("Server is initializing...");
+
+        if !parse_project(params.root_uri.unwrap(), self.prototypes.clone(), self.parsed_files.clone()) {
+            return Err(Error::parse_error());
+        }
 
         Ok(InitializeResult {
             server_info: None,

@@ -11,8 +11,8 @@
 			"request": "launch",
 			"args": [
 				"--disable-extensions",
-				"--extensionDevelopmentPath=${workspaceFolder}/clients/code/",
 				"--workspaceFolder=${workspaceFolder}/examples/space-station-14",
+				"--extensionDevelopmentPath=${workspaceFolder}/clients/code/",
 			],
 			"outFiles": [
 				"${workspaceFolder}/clients/code/out/**/*.js"

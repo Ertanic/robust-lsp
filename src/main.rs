@@ -7,6 +7,7 @@ use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 mod backend;
 mod parse;
 mod utils;
+mod completion;
 
 #[tokio::main]
 async fn main() {

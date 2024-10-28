@@ -7,14 +7,12 @@ use std::{
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
-        DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult,
-        InitializedParams, MessageType, ServerCapabilities, TextDocumentSyncCapability,
-        TextDocumentSyncKind, Url,
+        CompletionParams, CompletionResponse, DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, MessageType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url
     },
     Client, LanguageServer,
 };
 
-use crate::{parse::{csharp::CsharpClass, parse_project}, utils::check_project_compliance};
+use crate::{completion::{self}, parse::{csharp::CsharpClass, parse_project}, utils::check_project_compliance};
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
@@ -119,6 +117,26 @@ impl LanguageServer for Backend {
             None => {
                 tracing::warn!("File wasn't cached.");
             }
+        }
+    }
+
+    #[rustfmt::skip]
+    #[instrument(skip_all, fields(uri = %params.text_document_position.text_document.uri))]
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
+        let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
+
+        match extension {
+            "yml" | "yaml" => {
+                let opened = self.opened_files.read().unwrap();
+                let rope = opened.get(&params.text_document_position.text_document.uri);
+
+                match rope {
+                    Some(rope) => completion::yml::completion(rope, params.text_document_position.position, self.prototypes.clone()),
+                    None => Ok(None)
+                }
+            },
+            _ => Ok(None)
         }
     }
 

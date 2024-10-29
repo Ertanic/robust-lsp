@@ -121,11 +121,10 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
         .expect("Failed to load C# grammer");
-
-    tracing::trace!("Reading file and creating rope");
+    
     let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
 
-    tracing::trace!("Checking old tree");
+    
     let mut lock = loop {
         if let Ok(lock) = parsed_files.write() {
             break lock;
@@ -135,13 +134,11 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
     };
     let old_tree = lock.get_mut(&path);
 
-    tracing::trace!("Parsing file");
     let tree = parser.parse(rope.to_string(), old_tree.as_deref());
     if let Some(tree) = tree {
         if let Some(old_tree) = old_tree {
             *old_tree = tree.clone();
             drop(lock);
-            tracing::trace!("Updating old tree");
         }
 
         let root_node = tree.root_node();
@@ -154,7 +151,11 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
 
             while !stack.is_empty() {
                 let node = stack.pop().unwrap();
-
+                
+                if path.ends_with("EntityPrototype.cs") {
+                    tracing::trace!("Node kind: {}", node.kind());
+                }
+                
                 if node.kind() == "class_declaration" {
                     let src = src.clone();
                     tracing::trace!("Found class node");
@@ -180,7 +181,6 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
 }
 
 impl ParseFromNode for CsharpClass {
-    #[instrument(skip_all, ret)]
     fn get(node: Node, src: Arc<Rope>) -> ParseResult<Self> {
         let mut cursor = node.walk();
 
@@ -244,7 +244,6 @@ impl ParseFromNode for CsharpClass {
 }
 
 impl ParseFromNode for CsharpClassField {
-    #[instrument(skip(src), ret)]
     fn get(node: Node, src: Arc<Rope>) -> ParseResult<Self> {
         let mut cursor = node.walk();
         let source = src.clone().to_string();

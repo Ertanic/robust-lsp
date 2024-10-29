@@ -123,6 +123,8 @@ impl LanguageServer for Backend {
     #[rustfmt::skip]
     #[instrument(skip_all, fields(uri = %params.text_document_position.text_document.uri))]
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        tracing::trace!("Completion request has been received.");
+
         let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
         let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
 
@@ -136,7 +138,10 @@ impl LanguageServer for Backend {
                     None => Ok(None)
                 }
             },
-            _ => Ok(None)
+            _ => {
+                tracing::trace!("File extension is not supported.");
+                Ok(None)
+            }
         }
     }
 

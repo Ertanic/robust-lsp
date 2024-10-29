@@ -4,8 +4,8 @@ use stringcase::{camel_case, pascal_case};
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionResponse,
-        Position,
+        self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionResponse,
+        CompletionTextEdit, Position, TextEdit,
     },
 };
 use tracing::instrument;
@@ -89,6 +89,7 @@ pub fn completion(
                         }
                     };
 
+                    let get_col = || capture.node.end_position().column as u32 + 2;
                     CompletionItem {
                         label: name.to_owned(),
                         kind: Some(CompletionItemKind::VALUE),
@@ -96,7 +97,24 @@ pub fn completion(
                             detail: Some("Prototype".to_owned()),
                             ..Default::default()
                         }),
-                        insert_text: Some(camel_case(name.as_str())),
+
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: {
+                                let position = Position::new(position.line, get_col());
+                                lsp_types::Range {
+                                    start: position,
+                                    end: position,
+                                }
+                            },
+
+                            // VS Code ignores coordinates for some reason, so it only works via space.
+                            new_text: if position.character < get_col() {
+                                String::from(" ") + camel_case(name.as_str()).as_str()
+                            } else {
+                                camel_case(name.as_str())
+                            },
+                        })),
+                        
                         preselect: if name.to_lowercase() == "entity" {
                             Some(true)
                         } else {

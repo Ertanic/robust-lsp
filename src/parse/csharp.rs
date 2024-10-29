@@ -361,7 +361,13 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                             .utf8_text(src.as_bytes())
                             .unwrap()
                             .to_owned();
-                        attr_name = Some(name);
+
+                        attr_name =
+                            Some(if let Some(normalized) = name.strip_suffix("Attribute") {
+                                normalized.to_owned()
+                            } else {
+                                name
+                            });
                     }
                     "attribute_argument_list" => {
                         let mut arg_index = 0;
@@ -506,7 +512,7 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                     let attr_name = attr_name.clone().unwrap();
                                     match attr_name.as_str() {
                                         // check if an argument is valid
-                                        "Prototype" | "PrototypeAttribute" => {
+                                        "Prototype" => {
                                             // otherwise skip it
                                             if PROTOTYPE_ATTR_ARGS.len() > arg_index
                                                 && !args
@@ -518,7 +524,7 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                                 continue;
                                             }
                                         }
-                                        "DataField" | "DataFieldAttribute" => {
+                                        "DataField" => {
                                             if DATA_FIELD_ATTR_ARGS.len() > arg_index
                                                 && !args
                                                     .contains_key(DATA_FIELD_ATTR_ARGS[arg_index])
@@ -529,7 +535,7 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                                 continue;
                                             }
                                         }
-                                        "IdDataField" | "IdDataFieldAttribute" => {
+                                        "IdDataField" => {
                                             if ID_DATA_FIELD_ATTR_ARGS.len() > arg_index
                                                 && !args.contains_key(
                                                     ID_DATA_FIELD_ATTR_ARGS[arg_index],

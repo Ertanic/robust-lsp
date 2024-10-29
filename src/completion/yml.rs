@@ -58,13 +58,13 @@ pub fn completion(
                     c.base.iter().any(|b| b == "IPrototype")
                         && c.attributes
                             .iter()
-                            .any(|a| a.name == "Prototype" || a.name == "PrototypeAttribute")
+                            .any(|a| a.name == "Prototype")
                 })
                 .map(|c| {
                     let name = {
                         let mut name= None;
                         
-                        if let Some(attr) = c.attributes.iter().find(|a| a.name == "Prototype" || a.name == "PrototypeAttribute") {
+                        if let Some(attr) = c.attributes.iter().find(|a| a.name == "Prototype") {
                             if let Some(type_name) = attr.arguments.get("type") {
                                 if let CsharpAttributeArgumentType::String(type_name) = &type_name.value {
                                     name = Some(type_name);

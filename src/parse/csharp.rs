@@ -151,7 +151,7 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
 
             while !stack.is_empty() {
                 let node = stack.pop().unwrap();
-                
+
                 if path.ends_with("EntityPrototype.cs") {
                     tracing::trace!("Node kind: {}", node.kind());
                 }
@@ -162,8 +162,8 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
                     handles.push(s.spawn(move || CsharpClass::get(node, src)));
                 }
 
-                for i in (0..node.named_child_count()).rev() {
-                    stack.push(node.child(i).unwrap());
+                for i in 0..node.named_child_count() {
+                    stack.push(node.named_child(i).unwrap());
                 }
             }
 

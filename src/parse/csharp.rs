@@ -7,7 +7,6 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tracing::instrument;
 use tree_sitter::Node;
 
 static PROTOTYPE_ATTR_ARGS: &[&str] = &["type", "loadPriority"];
@@ -112,8 +111,7 @@ pub struct CsharpClassField {
     pub modifiers: HashSet<String>,
 }
 
-#[instrument(skip(parsed_files))]
-pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<CsharpClass>> {
+pub(crate) async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<CsharpClass>> {
     #[cfg(debug_assertions)]
     std::env::set_var("RUST_BACKTRACE", "1");
 
@@ -123,15 +121,8 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
         .expect("Failed to load C# grammer");
     
     let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
-
     
-    let mut lock = loop {
-        if let Ok(lock) = parsed_files.write() {
-            break lock;
-        } else {
-            std::thread::yield_now()
-        }
-    };
+    let mut lock = parsed_files.write().await;
     let old_tree = lock.get_mut(&path);
 
     let tree = parser.parse(rope.to_string(), old_tree.as_deref());
@@ -145,20 +136,14 @@ pub(crate) fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec
         let src = Arc::new(rope);
         let mut stack = vec![root_node];
 
-        tracing::trace!("Traversing tree to get classes");
         let classes = std::thread::scope(|s| {
             let mut handles = vec![];
 
             while !stack.is_empty() {
                 let node = stack.pop().unwrap();
-
-                if path.ends_with("EntityPrototype.cs") {
-                    tracing::trace!("Node kind: {}", node.kind());
-                }
                 
                 if node.kind() == "class_declaration" {
                     let src = src.clone();
-                    tracing::trace!("Found class node");
                     handles.push(s.spawn(move || CsharpClass::get(node, src)));
                 }
 
@@ -316,13 +301,6 @@ impl ParseFromNode for CsharpClassField {
                 }
             }
         }
-
-        tracing::trace!(
-            field_name = ?field_name,
-            type_name = ?type_name,
-            attributes = ?attributes,
-            modifiers = ?modifiers,
-        );
 
         match (field_name, type_name) {
             (Some(field_name), Some(type_name)) => Ok(CsharpClassField {

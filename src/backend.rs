@@ -1,36 +1,47 @@
 use ropey::Rope;
-use tracing::instrument;
-use tree_sitter::Tree;
 use std::{
-    collections::{HashMap, HashSet}, path::PathBuf, sync::{Arc, RwLock}
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
 };
+use tokio::sync::RwLock;
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
-        CompletionParams, CompletionResponse, DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, MessageType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url
+        CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+        DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
+        MessageType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     },
     Client, LanguageServer,
 };
+use tracing::instrument;
+use tree_sitter::Tree;
 
-use crate::{completion::{self}, parse::{csharp::CsharpClass, parse_project}, utils::check_project_compliance};
+use crate::{
+    completion::{self},
+    parse::{csharp::CsharpClass, parse_project},
+    utils::check_project_compliance,
+};
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
 
 pub(crate) struct Backend {
-    client: Client,
+    client: Arc<Client>,
     opened_files: RwLock<HashMap<Url, Rope>>,
     parsed_files: ParsedFiles,
-    prototypes: CsharpClasses,
+    classes: CsharpClasses,
+    root_uri: Arc<RwLock<Option<Url>>>,
 }
 
 impl Backend {
     pub(crate) fn new(client: Client) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             opened_files: Default::default(),
             parsed_files: ParsedFiles::default(),
-            prototypes: CsharpClasses::default(),
+            classes: CsharpClasses::default(),
+            root_uri: Default::default(),
         }
     }
 }
@@ -38,15 +49,16 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        tracing::info!("Server is initializing...");
+
         if !check_project_compliance(&params) {
             return Err(Error::request_cancelled());
         }
 
-        tracing::info!("Server is initializing...");
-
-        if !parse_project(params.root_uri.unwrap(), self.prototypes.clone(), self.parsed_files.clone()) {
-            return Err(Error::parse_error());
-        }
+        self.root_uri
+            .write()
+            .await
+            .replace(params.root_uri.unwrap());
 
         Ok(InitializeResult {
             server_info: None,
@@ -64,6 +76,17 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "server initialized!")
             .await;
+
+        // I'm shocked by this myself O_O
+        let uri = self.root_uri.read().await.clone().unwrap().clone();
+
+        parse_project(
+            uri,
+            self.classes.clone(),
+            self.parsed_files.clone(),
+            self.client.clone(),
+        )
+        .await;
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
@@ -74,7 +97,7 @@ impl LanguageServer for Backend {
                     let rope = Rope::from_reader(handler).unwrap();
                     self.opened_files
                         .write()
-                        .unwrap()
+                        .await
                         .insert(params.text_document.uri, rope);
                     tracing::trace!("Document has been cached.");
                 } else {
@@ -93,7 +116,7 @@ impl LanguageServer for Backend {
         match self
             .opened_files
             .write()
-            .unwrap()
+            .await
             .get_mut(&params.text_document.uri)
         {
             Some(rope) => {
@@ -107,10 +130,7 @@ impl LanguageServer for Backend {
                         rope.remove(start_idx..end_idx);
                         rope.insert(start_idx, &change.text);
 
-                        tracing::trace!(
-                            "Document has been changed. New changes: {}",
-                            change.text
-                        );
+                        tracing::trace!("Document has been changed. New changes: {}", change.text);
                     }
                 }
             }
@@ -130,11 +150,11 @@ impl LanguageServer for Backend {
 
         match extension {
             "yml" | "yaml" => {
-                let opened = self.opened_files.read().unwrap();
+                let opened = self.opened_files.read().await;
                 let rope = opened.get(&params.text_document_position.text_document.uri);
 
                 match rope {
-                    Some(rope) => completion::yml::completion(rope, params.text_document_position.position, self.prototypes.clone()),
+                    Some(rope) => completion::yml::completion(rope, params.text_document_position.position, self.classes.clone()),
                     None => Ok(None)
                 }
             },

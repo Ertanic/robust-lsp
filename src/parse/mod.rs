@@ -3,10 +3,10 @@ use crate::{
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use async_scoped::TokioScope;
-use csharp::CsharpClass;
 use globset::Glob;
 use ropey::Rope;
 use std::{num::NonZero, path::PathBuf, sync::Arc};
+use structs::CsharpClass;
 use tokio::sync::{Mutex, Semaphore};
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
@@ -14,6 +14,7 @@ use tree_sitter::Tree;
 
 mod common;
 pub mod csharp;
+pub mod structs;
 
 pub(crate) struct ParsedFile {
     pub tree: Option<Tree>,
@@ -74,31 +75,32 @@ pub async fn parse_project(
                             classes.write().await.extend(csharp_class);
                         }
 
-                        let mut lock = proto_status.lock().await;
-                        if actual_prototypes == prototypes_len {
-                            lock.finish(Some("Prototypes parsed")).await;
-                        } else {
-                            actual_prototypes += 1;
-                            let percent = percentage(actual_prototypes, prototypes_len);
-                            lock.next_state(percent as u32, None).await;
-                        }
+                        actual_prototypes += 1;
+                        let percent = percentage(actual_prototypes, prototypes_len);
+                        proto_status
+                            .lock()
+                            .await
+                            .next_state(percent as u32, Some(format!("{actual_prototypes}/{prototypes_len} ({percent}%)")))
+                            .await;
                     }
                     ParseResult::Components(csharp_class) => {
                         if let Ok(csharp_class) = csharp_class {
                             classes.write().await.extend(csharp_class);
                         }
 
-                        let mut lock = comps_status.lock().await;
-                        if actual_components == components_len {
-                            lock.finish(Some("Components parsed")).await;
-                        } else {
-                            actual_components += 1;
-                            let percent = percentage(actual_components, components_len);
-                            lock.next_state(percent as u32, None).await
-                        }
+                        actual_components += 1;
+                        let percent = percentage(actual_components, components_len);
+                        comps_status
+                            .lock()
+                            .await
+                            .next_state(percent as u32, Some(format!("{actual_components}/{components_len} ({percent}%)")))
+                            .await
                     }
                 }
             }
+
+            proto_status.lock().await.finish(None).await;
+            comps_status.lock().await.finish(None).await;
         }
     });
 
@@ -175,7 +177,7 @@ pub async fn parse_project(
 
                             i += 1;
                             let percent = percentage(i, other_len);
-                            other_status.lock().await.next_state(percent, None).await;
+                            other_status.lock().await.next_state(percent, Some(format!("{i}/{other_len} ({percent}%)"))).await;
                         }
 
                         other_status
@@ -276,7 +278,6 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
 
         s.spawn(async {
             for message in rx {
-                // tracing::trace!("Got message: {:?}", message);
                 match message {
                     FileType::Prototype(path) => prototypes.push(path),
                     FileType::Component(path) => components.push(path),

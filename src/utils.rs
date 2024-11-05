@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use tower_lsp::{
     lsp_types::{
         self, notification::Progress, request::WorkDoneProgressCreate, NumberOrString,
@@ -126,4 +126,14 @@ impl ProgressStatus {
 #[inline(always)]
 pub fn percentage(actual: u32, max: u32) -> u32 {
     (100 as f64 * actual as f64 / max as f64).round() as u32
+}
+
+pub fn block<Fn, F>(func: Fn) -> F::Output
+where
+    Fn: FnOnce() -> F,
+    F: Future,
+{
+    tokio::task::block_in_place(move || {
+        tokio::runtime::Handle::current().block_on(async move { func().await })
+    })
 }

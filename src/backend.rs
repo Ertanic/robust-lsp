@@ -17,11 +17,7 @@ use tower_lsp::{
 use tracing::instrument;
 use tree_sitter::Tree;
 
-use crate::{
-    completion::{self},
-    parse::{csharp::CsharpClass, parse_project},
-    utils::check_project_compliance,
-};
+use crate::{completion::yml, parse::{parse_project, structs::CsharpClass}, utils::check_project_compliance};
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
@@ -141,7 +137,6 @@ impl LanguageServer for Backend {
     }
 
     #[rustfmt::skip]
-    #[instrument(skip_all, fields(uri = %params.text_document_position.text_document.uri))]
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         tracing::trace!("Completion request has been received.");
 
@@ -154,7 +149,7 @@ impl LanguageServer for Backend {
                 let rope = opened.get(&params.text_document_position.text_document.uri);
 
                 match rope {
-                    Some(rope) => completion::yml::completion(rope, params.text_document_position.position, self.classes.clone()),
+                    Some(rope) => yml::completion(rope, params.text_document_position.position, self.classes.clone()),
                     None => Ok(None)
                 }
             },

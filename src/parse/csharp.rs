@@ -1,9 +1,14 @@
-use super::common::{DefinitionIndex, Index, ParseFromNode, ParseResult};
+use super::{
+    common::{ParseFromNode, ParseResult},
+    structs::{
+        CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
+        CsharpAttributeCollection, CsharpClass, CsharpClassField,
+    },
+};
 use crate::backend::ParsedFiles;
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
-    hash::Hash,
     path::PathBuf,
     sync::Arc,
 };
@@ -20,98 +25,10 @@ static DATA_FIELD_ATTR_ARGS: &[&str] = &[
 ];
 static ID_DATA_FIELD_ATTR_ARGS: &[&str] = &["priority", "customTypeSerializer"];
 
-#[allow(dead_code)]
-#[derive(Default, Clone, Debug)]
-pub struct CsharpClass {
-    pub name: String,
-    pub base: Vec<String>,
-    pub attributes: Vec<CsharpAttribute>,
-    pub fields: Vec<CsharpClassField>,
-    pub modifiers: HashSet<String>,
-
-    index: DefinitionIndex,
-}
-
-impl CsharpClass {
-    fn extend(&mut self, other: CsharpClass) {
-        self.attributes.extend(other.attributes);
-        self.fields.extend(other.fields);
-        self.modifiers.extend(other.modifiers);
-        self.base.extend(other.base);
-    }
-}
-
-impl From<&str> for CsharpClass {
-    fn from(value: &str) -> Self {
-        CsharpClass {
-            name: value.to_string(),
-            ..Default::default()
-        }
-    }
-}
-
-impl PartialEq for CsharpClass {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for CsharpClass {}
-
-impl Hash for CsharpClass {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-impl Index for CsharpClass {
-    fn index(&self) -> &super::common::DefinitionIndex {
-        &self.index
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone)]
-pub struct CsharpAttribute {
-    pub name: String,
-    pub arguments: HashMap<String, CsharpAttributeArgument>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone)]
-pub struct CsharpAttributeArgument {
-    pub index: usize,
-    pub name: String,
-    pub value: CsharpAttributeArgumentType,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone)]
-pub enum CsharpAttributeArgumentType {
-    #[default]
-    None,
-    String(String),
-    Bool(bool),
-    Real(f64),
-    Int(i64),
-
-    TypeOf(Box<CsharpAttributeArgumentType>),
-    GenericType {
-        indent: String,
-        types: Vec<CsharpAttributeArgumentType>,
-    },
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone)]
-pub struct CsharpClassField {
-    pub name: String,
-    pub type_name: String,
-    pub attributes: Vec<CsharpAttribute>,
-    pub modifiers: HashSet<String>,
-}
-
-pub(crate) async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<CsharpClass>> {
+pub(crate) async fn parse(
+    path: PathBuf,
+    parsed_files: ParsedFiles,
+) -> ParseResult<Vec<CsharpClass>> {
     #[cfg(debug_assertions)]
     std::env::set_var("RUST_BACKTRACE", "1");
 
@@ -119,9 +36,9 @@ pub(crate) async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResu
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
         .expect("Failed to load C# grammer");
-    
+
     let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
-    
+
     let mut lock = parsed_files.write().await;
     let old_tree = lock.get_mut(&path);
 
@@ -141,7 +58,7 @@ pub(crate) async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResu
 
             while !stack.is_empty() {
                 let node = stack.pop().unwrap();
-                
+
                 if node.kind() == "class_declaration" {
                     let src = src.clone();
                     handles.push(s.spawn(move || CsharpClass::get(node, src)));
@@ -171,7 +88,7 @@ impl ParseFromNode for CsharpClass {
 
         let mut modifiers = HashSet::new();
         let mut base = vec![];
-        let mut attributes: Vec<CsharpAttribute> = vec![];
+        let mut attributes = CsharpAttributeCollection::new();
         let mut fields = vec![];
         let mut name = None;
 
@@ -215,14 +132,7 @@ impl ParseFromNode for CsharpClass {
         }
 
         match name {
-            Some(name) => Ok(CsharpClass {
-                name,
-                modifiers,
-                base,
-                attributes,
-                fields,
-                index: Default::default(),
-            }),
+            Some(name) => Ok(CsharpClass::new(name, base, attributes, fields, modifiers)),
             _ => Err(()),
         }
     }
@@ -234,7 +144,7 @@ impl ParseFromNode for CsharpClassField {
         let source = src.clone().to_string();
 
         let mut modifiers = HashSet::new();
-        let mut attributes = vec![];
+        let mut attributes = CsharpAttributeCollection::new();
         let mut type_name = None;
         let mut field_name = None;
 

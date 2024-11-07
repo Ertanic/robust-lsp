@@ -4,23 +4,15 @@ use crate::{
 };
 use async_scoped::TokioScope;
 use globset::Glob;
-use ropey::Rope;
 use std::{num::NonZero, path::PathBuf, sync::Arc};
-use structs::CsharpClass;
+use structs::csharp::CsharpClass;
 use tokio::sync::{Mutex, Semaphore};
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
-use tree_sitter::Tree;
 
 mod common;
 pub mod csharp;
 pub mod structs;
-
-pub(crate) struct ParsedFile {
-    pub tree: Option<Tree>,
-    pub path: PathBuf,
-    pub rope: Rope,
-}
 
 #[derive(Debug)]
 enum FileType {
@@ -80,7 +72,10 @@ pub async fn parse_project(
                         proto_status
                             .lock()
                             .await
-                            .next_state(percent as u32, Some(format!("{actual_prototypes}/{prototypes_len} ({percent}%)")))
+                            .next_state(
+                                percent as u32,
+                                Some(format!("{actual_prototypes}/{prototypes_len} ({percent}%)")),
+                            )
                             .await;
                     }
                     ParseResult::Components(csharp_class) => {
@@ -93,7 +88,10 @@ pub async fn parse_project(
                         comps_status
                             .lock()
                             .await
-                            .next_state(percent as u32, Some(format!("{actual_components}/{components_len} ({percent}%)")))
+                            .next_state(
+                                percent as u32,
+                                Some(format!("{actual_components}/{components_len} ({percent}%)")),
+                            )
                             .await
                     }
                 }
@@ -177,7 +175,11 @@ pub async fn parse_project(
 
                             i += 1;
                             let percent = percentage(i, other_len);
-                            other_status.lock().await.next_state(percent, Some(format!("{i}/{other_len} ({percent}%)"))).await;
+                            other_status
+                                .lock()
+                                .await
+                                .next_state(percent, Some(format!("{i}/{other_len} ({percent}%)")))
+                                .await;
                         }
 
                         other_status

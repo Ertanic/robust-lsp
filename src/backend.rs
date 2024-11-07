@@ -1,6 +1,6 @@
 use crate::{
     completion::{yml::YamlCompletion, Completion},
-    parse::{csharp, parse_project, structs::CsharpClass},
+    parse::{csharp, parse_project, structs::csharp::CsharpClass},
     utils::check_project_compliance,
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};

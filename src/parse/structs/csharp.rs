@@ -1,14 +1,5 @@
-use super::{
-    common::{DefinitionIndex, Index},
-    CsharpClasses,
-};
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-    ops::Deref,
-    path::PathBuf,
-};
+#![allow(unused)]
+use super::*;
 
 pub struct ReflectionManager {
     classes: CsharpClasses,
@@ -292,19 +283,17 @@ impl Hash for CsharpClass {
 }
 
 impl Index for CsharpClass {
-    fn index(&self) -> &super::common::DefinitionIndex {
+    fn index(&self) -> &common::DefinitionIndex {
         &self.index
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct CsharpAttribute {
     pub name: String,
     pub arguments: HashMap<String, CsharpAttributeArgument>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct CsharpAttributeArgument {
     pub index: usize,
@@ -312,7 +301,6 @@ pub struct CsharpAttributeArgument {
     pub value: CsharpAttributeArgumentType,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub enum CsharpAttributeArgumentType {
     #[default]
@@ -329,7 +317,6 @@ pub enum CsharpAttributeArgumentType {
     },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct CsharpClassField {
     pub name: String,

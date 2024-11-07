@@ -1,7 +1,7 @@
 use super::{Completion, CompletionResult};
 use crate::{
     backend::CsharpClasses,
-    parse::structs::{Component, CsharpClassField, Prototype, ReflectionManager},
+    parse::structs::csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
     utils::block,
 };
 use rayon::prelude::*;

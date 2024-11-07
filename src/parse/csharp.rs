@@ -1,12 +1,11 @@
 use super::{
     common::{ParseFromNode, ParseResult},
-    structs::{
+    structs::csharp::{
         CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
         CsharpAttributeCollection, CsharpClass, CsharpClassField,
     },
 };
 use crate::backend::ParsedFiles;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},

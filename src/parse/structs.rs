@@ -7,6 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     ops::Deref,
+    path::PathBuf,
 };
 
 pub struct ReflectionManager {
@@ -240,6 +241,7 @@ pub struct CsharpClass {
     pub fields: Vec<CsharpClassField>,
     pub modifiers: HashSet<String>,
 
+    pub file: PathBuf,
     index: DefinitionIndex,
 }
 
@@ -259,6 +261,10 @@ impl CsharpClass {
             modifiers,
             ..Default::default()
         }
+    }
+
+    pub fn set_file(&mut self, file: PathBuf) {
+        self.file = file;
     }
 }
 

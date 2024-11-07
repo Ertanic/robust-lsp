@@ -6,6 +6,7 @@ use super::{
     },
 };
 use crate::backend::ParsedFiles;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
@@ -29,9 +30,6 @@ pub(crate) async fn parse(
     path: PathBuf,
     parsed_files: ParsedFiles,
 ) -> ParseResult<Vec<CsharpClass>> {
-    #[cfg(debug_assertions)]
-    std::env::set_var("RUST_BACKTRACE", "1");
-
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -53,6 +51,7 @@ pub(crate) async fn parse(
         let src = Arc::new(rope);
         let mut stack = vec![root_node];
 
+        // TODO: Replace scope to TokioScope
         let classes = std::thread::scope(|s| {
             let mut handles = vec![];
 
@@ -61,7 +60,16 @@ pub(crate) async fn parse(
 
                 if node.kind() == "class_declaration" {
                     let src = src.clone();
-                    handles.push(s.spawn(move || CsharpClass::get(node, src)));
+                    handles.push(s.spawn({
+                        let path = path.clone();
+                        move || {
+                            let mut class = CsharpClass::get(node, src);
+                            if let Ok(ref mut class) = class {
+                                class.set_file(path);
+                            }
+                            class
+                        }
+                    }));
                 }
 
                 for i in 0..node.named_child_count() {

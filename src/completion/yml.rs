@@ -180,7 +180,6 @@ impl YamlCompletion {
         }
     }
 
-
     fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
         let proto_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);

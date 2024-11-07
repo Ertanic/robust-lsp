@@ -1,3 +1,9 @@
+use crate::{
+    completion::{yml::YamlCompletion, Completion},
+    parse::{csharp, parse_project, structs::CsharpClass},
+    utils::check_project_compliance,
+};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
@@ -9,19 +15,14 @@ use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
         CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
-        MessageType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+        DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams, InitializeResult,
+        InitializedParams, MessageType, ServerCapabilities, TextDocumentSyncCapability,
+        TextDocumentSyncKind, Url,
     },
     Client, LanguageServer,
 };
 use tracing::instrument;
 use tree_sitter::Tree;
-
-use crate::{
-    completion::{yml::YamlCompletion, Completion},
-    parse::{parse_project, structs::CsharpClass},
-    utils::check_project_compliance,
-};
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
@@ -137,6 +138,55 @@ impl LanguageServer for Backend {
             None => {
                 tracing::warn!("File wasn't cached.");
             }
+        }
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let path = match params.text_document.uri.to_file_path() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!(
+                    "Failed to convert uri to path: {}.",
+                    params.text_document.uri
+                );
+                return;
+            }
+        };
+        let ext = path
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default();
+
+        match ext {
+            "cs" => {
+                let classes = csharp::parse(path.clone(), self.parsed_files.clone()).await;
+                match classes {
+                    Ok(classes) => {
+                        let mut lock = self.classes.write().await;
+                        let diff = lock
+                            .par_iter()
+                            .filter(|c| c.file == path)
+                            .filter(|c| !classes.contains(c))
+                            .cloned()
+                            .collect::<Vec<_>>();
+
+                        for class in classes {
+                            tracing::info!("New/changed class: {}", class.name);
+                            lock.insert(class);
+                        }
+                        for class in diff {
+                            tracing::info!("Remove class: {}", class.name);
+                            lock.remove(&class);
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!("Failed to parse the file {}", path.display());
+                        return;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

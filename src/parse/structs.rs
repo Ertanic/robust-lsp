@@ -63,6 +63,21 @@ impl ReflectionManager {
 
         Prototype::try_from(class?).ok()
     }
+
+    pub async fn get_component_by_name(&self, name: impl AsRef<str>) -> Option<Component> {
+        let name = name.as_ref();
+
+        let lock = self.classes.read().await;
+        let class = lock.par_iter().find_any(|c| {
+            let name = c.name == name || c.name == format!("{name}Component");
+            let attr = c.attributes.contains("RegisterComponent");
+            let base = c.base.contains(&String::from("Component"))
+                || c.base.contains(&String::from("IComponent"));
+
+            name && attr && base
+        });
+
+        Component::try_from(class?).ok()
     }
 }
 
@@ -124,11 +139,11 @@ impl Extend<CsharpAttribute> for CsharpAttributeCollection {
     }
 }
 
-pub struct Component<'class> {
-    class: &'class CsharpClass,
+pub struct Component {
+    class: CsharpClass,
 }
 
-impl<'class> Component<'class> {
+impl Component {
     pub fn get_component_name(&self) -> String {
         let name = self
             .class
@@ -140,22 +155,24 @@ impl<'class> Component<'class> {
     }
 }
 
-impl<'class> TryFrom<&'class CsharpClass> for Component<'class> {
+impl TryFrom<&CsharpClass> for Component {
     type Error = ();
 
-    fn try_from(class: &'class CsharpClass) -> Result<Self, Self::Error> {
+    fn try_from(class: &CsharpClass) -> Result<Self, Self::Error> {
         if class.attributes.contains("RegisterComponent")
             && class.base.contains(&"Component".to_owned())
             || class.base.contains(&"IComponent".to_owned())
         {
-            Ok(Component { class })
+            Ok(Component {
+                class: class.clone(),
+            })
         } else {
             Err(())
         }
     }
 }
 
-impl<'class> Deref for Component<'class> {
+impl Deref for Component {
     type Target = CsharpClass;
 
     fn deref(&self) -> &Self::Target {

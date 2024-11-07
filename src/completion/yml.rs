@@ -133,77 +133,101 @@ impl YamlCompletion {
         let nest = self.get_nesting(&node);
 
         if nest > 2 {
-            None
+            self.component_fields_completion(node)
         } else {
             self.prototype_fields_completion(node)
         }
     }
 
-    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
-        let proto = {
-            let mut proto = None;
-            let children_count = node.named_child_count();
-
-            for i in 0..children_count {
-                let field_node = node.named_child(i)?;
-                let key_node = field_node.child_by_field_name("key");
-                let value_node = field_node.child_by_field_name("value");
-
-                let (key, value) = match (key_node, value_node) {
-                    (Some(key_node), Some(value_node)) => (
-                        key_node.utf8_text(self.src.as_bytes()).ok()?,
-                        value_node.utf8_text(self.src.as_bytes()).ok()?,
-                    ),
-                    _ => continue,
-                };
-
-    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
-        let proto_name = self.get_object_name(&node)?;
-            let specified_fields = self.get_specified_fields(&node);
-            let reflection = ReflectionManager::new(self.classes.clone());
-        let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
-                let fields = block(|| reflection.get_fields(&proto))
-                    .into_par_iter()
-                    .filter(|f| f.attributes.contains("DataField"))
-                    .chain([CsharpClassField {
-                        name: "id".to_owned(),
-                        type_name: "string".to_owned(),
-                        ..Default::default()
-                    }])
-                    .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
-                    .map(|f| {
-                        let name = f.get_data_field_name();
-
-                        CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::FIELD),
-                            detail: Some(f.type_name),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range: {
-                                    let position = Position::new(
-                                        self.position.line,
-                                        node.start_position().column as u32,
-                                    );
-                                    lsp_types::Range {
-                                        start: position,
-                                        end: position,
-                                    }
-                                },
-                                new_text: format!("{name}: "),
-                            })),
-                            sort_text: if f.name == "id" || f.name == "components" {
-                                Some("0".to_owned())
-                            } else {
-                                Some("1".to_owned())
-                            },
-                            ..Default::default()
-                        }
-                    })
-                    .collect::<Vec<_>>();
+    fn component_fields_completion(&self, node: Node) -> CompletionResult {
+        let comp_name = self.get_object_name(&node)?;
+        tracing::trace!("Component name: {comp_name}");
+        let specified_fields = self.get_specified_fields(&node);
+        let reflection = ReflectionManager::new(self.classes.clone());
+        let comp = block(|| reflection.get_component_by_name(comp_name))?;
+        let fields = block(|| reflection.get_fields(&comp))
+            .into_par_iter()
+            .filter(|f| f.attributes.contains("DataField"))
+            .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
+            .map(|f| {
+                let name = f.get_data_field_name();
+                CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(f.type_name),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: {
+                            let position = Position::new(
+                                self.position.line,
+                                node.start_position().column as u32,
+                            );
+                            lsp_types::Range {
+                                start: position,
+                                end: position,
+                            }
+                        },
+                        new_text: format!("{name}: "),
+                    })),
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
 
         if fields.len() > 0 {
             Some(CompletionResponse::Array(fields))
-            } else {
+        } else {
+            None
+        }
+    }
+
+
+    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
+        let proto_name = self.get_object_name(&node)?;
+        let specified_fields = self.get_specified_fields(&node);
+        let reflection = ReflectionManager::new(self.classes.clone());
+        let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
+        let fields = block(|| reflection.get_fields(&proto))
+            .into_par_iter()
+            .filter(|f| f.attributes.contains("DataField"))
+            .chain([CsharpClassField {
+                name: "id".to_owned(),
+                type_name: "string".to_owned(),
+                ..Default::default()
+            }])
+            .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
+            .map(|f| {
+                let name = f.get_data_field_name();
+
+                CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(f.type_name),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: {
+                            let position = Position::new(
+                                self.position.line,
+                                node.start_position().column as u32,
+                            );
+                            lsp_types::Range {
+                                start: position,
+                                end: position,
+                            }
+                        },
+                        new_text: format!("{name}: "),
+                    })),
+                    sort_text: if f.name == "id" || f.name == "components" {
+                        Some("0".to_owned())
+                    } else {
+                        Some("1".to_owned())
+                    },
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if fields.len() > 0 {
+            Some(CompletionResponse::Array(fields))
+        } else {
             None
         }
     }

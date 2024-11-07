@@ -1,6 +1,10 @@
 use crate::{
     completion::{yml::YamlCompletion, Completion},
-    parse::{csharp, parse_project, structs::csharp::CsharpClass},
+    parse::{
+        csharp, parse_project,
+        structs::{csharp::CsharpClass, yaml::YamlPrototype},
+        yaml,
+    },
     utils::check_project_compliance,
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -25,6 +29,7 @@ use tracing::instrument;
 use tree_sitter::Tree;
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
+pub(crate) type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
 
 pub(crate) struct Backend {
@@ -32,6 +37,7 @@ pub(crate) struct Backend {
     opened_files: RwLock<HashMap<Url, Rope>>,
     parsed_files: ParsedFiles,
     classes: CsharpClasses,
+    prototypes: YamlPrototypes,
     root_uri: Arc<RwLock<Option<Url>>>,
 }
 
@@ -42,6 +48,7 @@ impl Backend {
             opened_files: Default::default(),
             parsed_files: ParsedFiles::default(),
             classes: CsharpClasses::default(),
+            prototypes: Default::default(),
             root_uri: Default::default(),
         }
     }
@@ -84,6 +91,7 @@ impl LanguageServer for Backend {
         parse_project(
             uri,
             self.classes.clone(),
+            self.prototypes.clone(),
             self.parsed_files.clone(),
             self.client.clone(),
         )
@@ -178,6 +186,42 @@ impl LanguageServer for Backend {
                         for class in diff {
                             tracing::info!("Remove class: {}", class.name);
                             lock.remove(&class);
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!("Failed to parse the file {}", path.display());
+                        return;
+                    }
+                }
+            }
+            "yml" | "yaml" => {
+                let prototypes = yaml::parse(path.clone(), self.parsed_files.clone()).await;
+                match prototypes {
+                    Ok(prototypes) => {
+                        let mut lock = self.prototypes.write().await;
+                        let diff = lock
+                            .par_iter()
+                            .filter(|p| p.file == path)
+                            .filter(|p| !prototypes.contains(p))
+                            .cloned()
+                            .collect::<Vec<_>>();
+
+                        for proto in prototypes {
+                            tracing::info!(
+                                "New/changed prototype: {} with id {}",
+                                proto.prototype,
+                                proto.id
+                            );
+                            lock.insert(proto);
+                        }
+
+                        for proto in diff {
+                            tracing::info!(
+                                "Remove prototype: {} with id {}",
+                                proto.prototype,
+                                proto.id
+                            );
+                            lock.remove(&proto);
                         }
                     }
                     Err(_) => {

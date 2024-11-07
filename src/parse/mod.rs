@@ -1,11 +1,11 @@
 use crate::{
-    backend::{CsharpClasses, ParsedFiles},
+    backend::{CsharpClasses, ParsedFiles, YamlPrototypes},
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use async_scoped::TokioScope;
 use globset::Glob;
 use std::{num::NonZero, path::PathBuf, sync::Arc};
-use structs::csharp::CsharpClass;
+use structs::{csharp::CsharpClass, yaml::YamlPrototype};
 use tokio::sync::{Mutex, Semaphore};
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
@@ -13,23 +13,27 @@ use tracing::instrument;
 mod common;
 pub mod csharp;
 pub mod structs;
+pub mod yaml;
 
 #[derive(Debug)]
 enum FileType {
     Prototype(PathBuf),
     Component(PathBuf),
     Lazy(PathBuf),
+    YamlPrototype(PathBuf),
 }
 
 enum ParseResult {
     Prototypes(Result<Vec<CsharpClass>, ()>),
     Components(Result<Vec<CsharpClass>, ()>),
+    YamlPrototypes(Result<Vec<YamlPrototype>, ()>),
 }
 
 #[instrument(skip_all)]
 pub async fn parse_project(
     uri: Url,
     classes: CsharpClasses,
+    prototypes: YamlPrototypes,
     parsed_files: ParsedFiles,
     client: Arc<tower_lsp::Client>,
 ) -> bool {
@@ -41,15 +45,18 @@ pub async fn parse_project(
     let prototypes_len = files.prototypes.len();
     let components_len = files.components.len();
     let other_len = files.other.len();
+    let yaml_protos_len = files.yaml_prototypes.len();
 
-    tracing::trace!("{} prototypes files found", prototypes_len);
-    tracing::trace!("{} components files found", components_len);
-    tracing::trace!("{} other files found", other_len);
+    tracing::info!("{components_len} components files found");
+    tracing::info!("{prototypes_len} C# prototypes files found");
+    tracing::info!("{other_len} other C# files found");
+    tracing::info!("{yaml_protos_len} prototypes files found");
 
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let proto_status = get_status(client.clone(), "prototypes").await;
+    let proto_status = get_status(client.clone(), "C# prototypes").await;
     let comps_status = get_status(client.clone(), "components").await;
+    let yaml_protos_status = get_status(client.clone(), "YAML prototypes").await;
 
     let reader = tokio::spawn({
         let classes = classes.clone();
@@ -57,8 +64,10 @@ pub async fn parse_project(
         async move {
             let prototypes_len = prototypes_len as u32;
             let components_len = components_len as u32;
+            let yaml_protos_len = yaml_protos_len as u32;
             let mut actual_prototypes = 0;
             let mut actual_components = 0;
+            let mut actual_yaml_protos = 0;
 
             for message in rx {
                 match message {
@@ -94,16 +103,35 @@ pub async fn parse_project(
                             )
                             .await
                     }
+                    ParseResult::YamlPrototypes(yaml_protos) => {
+                        if let Ok(yaml_protos) = yaml_protos {
+                            prototypes.write().await.extend(yaml_protos);
+                        }
+
+                        actual_yaml_protos += 1;
+                        let percent = percentage(actual_yaml_protos, yaml_protos_len);
+                        proto_status
+                            .lock()
+                            .await
+                            .next_state(
+                                percent as u32,
+                                Some(format!(
+                                    "{actual_yaml_protos}/{yaml_protos_len} ({percent}%)"
+                                )),
+                            )
+                            .await
+                    }
                 }
             }
 
             proto_status.lock().await.finish(None).await;
             comps_status.lock().await.finish(None).await;
+            yaml_protos_status.lock().await.finish(None).await;
         }
     });
 
     TokioScope::scope_and_block(|s| {
-        // Run prototypes parsing
+        // Run C# prototypes parsing
         s.spawn(async {
             TokioScope::scope_and_block(|s| {
                 for p in files.prototypes {
@@ -116,7 +144,7 @@ pub async fn parse_project(
                     });
                 }
 
-                tracing::trace!("All prototypes has been sent for parsing");
+                tracing::trace!("All C# prototypes has been sent for parsing");
             });
         });
 
@@ -134,6 +162,20 @@ pub async fn parse_project(
                 }
 
                 tracing::trace!("All components has been sent for parsing");
+            });
+        });
+
+        s.spawn(async {
+            TokioScope::scope_and_block(|s| {
+                for p in files.yaml_prototypes {
+                    let parsed_files = parsed_files.clone();
+                    let tx = tx.clone();
+
+                    s.spawn(async move {
+                        let parsed_protos = yaml::parse(p.clone(), parsed_files).await;
+                        tx.send(ParseResult::YamlPrototypes(parsed_protos)).unwrap();
+                    });
+                }
             });
         });
 
@@ -231,6 +273,7 @@ fn get_folders(uri: &Url) -> Vec<PathBuf> {
         "Content.Client",
         "Content.Server",
         "Content.Shared",
+        "Resources/Prototypes",
     ]
     .into_iter()
     .map(|f| uri.to_file_path().unwrap().join(f))
@@ -242,9 +285,11 @@ struct CollectedFiles {
     prototypes: Vec<PathBuf>,
     components: Vec<PathBuf>,
     other: Vec<PathBuf>,
+    yaml_prototypes: Vec<PathBuf>,
 }
 
 async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
+    let mut yaml_prototypes = vec![];
     let mut prototypes = vec![];
     let mut components = vec![];
     let mut other = vec![];
@@ -260,6 +305,9 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                 let proto_set = Glob::new("*Prototype.cs").unwrap().compile_matcher();
                 let comp_set = Glob::new("*Component.cs").unwrap().compile_matcher();
                 let csharp_set = Glob::new("*.cs").unwrap().compile_matcher();
+                let yaml_set = Glob::new("**/Prototypes/**/*.{yml,yaml}")
+                    .unwrap()
+                    .compile_matcher();
 
                 for file in walkdir::WalkDir::new(&folder) {
                     if let Ok(file) = file {
@@ -270,6 +318,8 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                             tx.send(FileType::Component(path.to_owned())).unwrap();
                         } else if csharp_set.is_match(path) {
                             tx.send(FileType::Lazy(path.to_owned())).unwrap();
+                        } else if yaml_set.is_match(path) {
+                            tx.send(FileType::YamlPrototype(path.to_owned())).unwrap();
                         }
                     }
                 }
@@ -284,6 +334,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                     FileType::Prototype(path) => prototypes.push(path),
                     FileType::Component(path) => components.push(path),
                     FileType::Lazy(path) => other.push(path),
+                    FileType::YamlPrototype(path) => yaml_prototypes.push(path),
                 }
             }
         });
@@ -293,6 +344,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
         prototypes,
         components,
         other,
+        yaml_prototypes,
     }
 }
 

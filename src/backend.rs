@@ -17,7 +17,11 @@ use tower_lsp::{
 use tracing::instrument;
 use tree_sitter::Tree;
 
-use crate::{completion::yml, parse::{parse_project, structs::CsharpClass}, utils::check_project_compliance};
+use crate::{
+    completion::{yml::YamlCompletion, Completion},
+    parse::{parse_project, structs::CsharpClass},
+    utils::check_project_compliance,
+};
 
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
@@ -149,7 +153,10 @@ impl LanguageServer for Backend {
                 let rope = opened.get(&params.text_document_position.text_document.uri);
 
                 match rope {
-                    Some(rope) => yml::completion(rope, params.text_document_position.position, self.classes.clone()),
+                    Some(rope) => {
+                        let completion = YamlCompletion::new(self.classes.clone(), params.text_document_position.position, rope);
+                        Ok(completion.completion())
+                    },
                     None => Ok(None)
                 }
             },

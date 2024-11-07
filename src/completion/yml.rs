@@ -1,361 +1,436 @@
+use super::{Completion, CompletionResult};
 use crate::{
     backend::CsharpClasses,
-    parse::structs::{CsharpAttributeArgumentType, CsharpClassField, Prototype, ReflectionManager},
+    parse::structs::{Component, CsharpClassField, Prototype, ReflectionManager},
     utils::block,
 };
 use rayon::prelude::*;
 use ropey::Rope;
-use std::ops::Range;
 use stringcase::camel_case;
-use tower_lsp::{
-    jsonrpc::Result,
-    lsp_types::{
-        self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionResponse,
-        CompletionTextEdit, Position, TextEdit,
-    },
+use tower_lsp::lsp_types::{
+    self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionResponse,
+    CompletionTextEdit, Position, TextEdit,
 };
-use tracing::instrument;
-use tree_sitter::{Node, Parser, Point, Query, QueryCapture, QueryCursor, QueryMatch};
+use tree_sitter::{Node, Parser, Point, Tree};
 
-#[instrument(skip_all)]
-pub fn completion(
-    rope: &Rope,
-    position: Position,
+pub struct YamlCompletion {
     classes: CsharpClasses,
-) -> Result<Option<CompletionResponse>> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_yaml::language()).unwrap();
+    position: Position,
+    src: String,
+    tree: Tree,
+}
 
-    let src = rope.to_string();
+impl YamlCompletion {
+    pub fn new(classes: CsharpClasses, position: Position, src: &Rope) -> Self {
+        let src = src.to_string();
 
-    let tree = parser.parse(&src, None).unwrap();
-    let query = Query::new(
-        &tree_sitter_yaml::language(),
-        include_str!("../queries/prototype_yml_field.scm"),
-    )
-    .unwrap();
-    let mut query_cursor = QueryCursor::new();
-    query_cursor.set_point_range(Range {
-        start: Point::new(position.line as usize, 0),
-        end: Point::new(position.line as usize, position.character as usize),
-    });
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_yaml::language()).unwrap();
+        let tree = parser.parse(&src, None).unwrap();
 
-    let captures = query_cursor.captures(&query, tree.root_node(), src.as_bytes());
-    for (m, _) in captures {
-        let completions = match_patterns(m, classes.clone(), &src, &position);
-        if completions.is_some() {
-            return Ok(completions);
+        Self {
+            classes,
+            position,
+            src,
+            tree,
         }
     }
 
-    Ok(None)
-}
+    fn get_nesting(&self, node: &Node) -> usize {
+        let mut nest = 0;
 
-// I don't like using locks, but I haven't thought of anything better to prevent the compiler from
-// swearing at the lack of Sync and Send on tree-sitter types that contain raw references inside them.
-fn match_patterns(
-    m: QueryMatch,
-    classes: CsharpClasses,
-    src: &str,
-    position: &Position,
-) -> Option<CompletionResponse> {
-    let get_nesting = |node: Node| {
-        let mut i = 0;
         let mut parent = node.parent();
         while let Some(node) = parent {
             if node.kind() == "block_node" {
-                i += 1;
+                nest += 1;
             }
             parent = node.parent();
         }
-        i
-    };
 
-    match m.pattern_index {
-        0 => {
-            for capture in m.captures {
-                let block_mapping_pair_node = capture.node;
+        nest
+    }
 
-                if get_nesting(block_mapping_pair_node) > 2 {
-                    return None;
-                }
+    fn get_object_name(&self, node: &Node) -> Option<&str> {
+        let mut name = None;
+        let children_count = node.named_child_count();
 
-                let key_node = match block_mapping_pair_node.child_by_field_name("key") {
-                    Some(node) => node,
-                    None => return None,
-                };
-                let key_name = key_node.utf8_text(src.as_bytes()).unwrap();
+        for i in 0..children_count {
+            let field_node = node.named_child(i)?;
+            let key_node = field_node.child_by_field_name("key");
+            let value_node = field_node.child_by_field_name("value");
 
-                let completions = match key_name {
-                    "type" => get_type_completion(classes, capture, key_node, *position, &src),
-                    _ => return None,
-                };
-
-                return Some(CompletionResponse::Array(completions));
-            }
-        }
-        1 => {
-            let get_specified_fields = |block_mapping_node: Node| {
-                let mut fields = Vec::new();
-                for i in 0..block_mapping_node.child_count() {
-                    let child = block_mapping_node.child(i).unwrap();
-                    if child.kind() == "block_mapping_pair" {
-                        let key_node = child.child_by_field_name("key");
-                        if let Some(key_node) = key_node {
-                            fields.push(key_node.utf8_text(src.as_bytes()).unwrap());
-                        }
-                    }
-                }
-                fields
+            let (key, value) = match (key_node, value_node) {
+                (Some(key_node), Some(value_node)) => (
+                    key_node.utf8_text(self.src.as_bytes()).ok()?,
+                    value_node.utf8_text(self.src.as_bytes()).ok()?,
+                ),
+                _ => continue,
             };
 
-            for capture in m.captures {
-                let block_mapping_node = capture.node;
-
-                if get_nesting(block_mapping_node) > 2 {
-                    return None;
-                }
-
-                let proto_node = {
-                    let mut node = None;
-
-                    for i in 0..block_mapping_node.child_count() {
-                        let child = block_mapping_node.child(i).unwrap();
-                        let key_node = child.child_by_field_name("key");
-                        if let Some(key_node) = key_node {
-                            if key_node.utf8_text(src.as_bytes()).unwrap() == "type" {
-                                node = Some(child);
-                                break;
-                            }
-                        }
-                    }
-
-                    node
-                };
-
-                let key_node = {
-                    let mut node = None;
-
-                    for i in 0..block_mapping_node.named_child_count() {
-                        let child = block_mapping_node.named_child(i).unwrap();
-                        if child.kind() == "ERROR" {
-                            node = Some(child);
-                            break;
-                        }
-                    }
-
-                    node.or_else(|| block_mapping_node.child_by_field_name("key"))
-                };
-
-                match (key_node, proto_node) {
-                    (Some(key_node), Some(proto_node)) => {
-                        let proto_name = proto_node.child_by_field_name("value");
-                        if proto_name.is_none() {
-                            return None;
-                        }
-
-                        let specified_fields = get_specified_fields(block_mapping_node);
-
-                        let proto_name = proto_name.unwrap().utf8_text(src.as_bytes()).unwrap();
-                        let reflection = ReflectionManager::new(classes.clone());
-
-                        if let Some(proto) = block(|| reflection.get_prototype_by_name(proto_name))
-                        {
-                            let fields = block(|| reflection.get_fields(&proto))
-                                .into_par_iter()
-                                .filter(|f| f.attributes.contains("DataField"))
-                                .filter(|f| {
-                                    !specified_fields.contains(&f.get_data_field_name().as_str())
-                                })
-                                .filter(|f| {
-                                    let attr = f.attributes.get("DataField").unwrap();
-                                    let name = attr.arguments.get("tag");
-
-                                    if let Some(name) = name {
-                                        if let CsharpAttributeArgumentType::String(ref name) =
-                                            name.value
-                                        {
-                                            strsim::damerau_levenshtein(
-                                                key_node
-                                                    .utf8_text(src.as_bytes())
-                                                    .unwrap()
-                                                    .trim_matches('"'),
-                                                name,
-                                            ) < name.len()
-                                        } else {
-                                            true
-                                        }
-                                    } else {
-                                        strsim::damerau_levenshtein(
-                                            key_node.utf8_text(src.as_bytes()).unwrap(),
-                                            &f.name,
-                                        ) < f.name.len()
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-
-                            return Some(CompletionResponse::Array(get_field_completion(
-                                fields,
-                                block_mapping_node,
-                                *position,
-                            )));
-                        }
-                    }
-                    (None, Some(proto_node)) => {
-                        let proto_name = proto_node.child_by_field_name("value");
-                        if proto_name.is_none() {
-                            return None;
-                        }
-
-                        let specified_fields = get_specified_fields(block_mapping_node);
-
-                        let reflection = ReflectionManager::new(classes.clone());
-                        let proto_name = proto_name.unwrap().utf8_text(src.as_bytes()).unwrap();
-
-                        if let Some(proto) = block(|| reflection.get_prototype_by_name(proto_name))
-                        {
-                            let fields = block(|| reflection.get_fields(&proto))
-                                .into_par_iter()
-                                .filter(|f| f.attributes.contains("DataField"))
-                                .chain([CsharpClassField {
-                                    name: "id".to_owned(),
-                                    type_name: "string".to_owned(),
-                                    ..Default::default()
-                                }])
-                                .filter(|f| {
-                                    !specified_fields.contains(&f.get_data_field_name().as_str())
-                                })
-                                .collect::<Vec<_>>();
-
-                            return Some(CompletionResponse::Array(get_field_completion(
-                                fields,
-                                block_mapping_node,
-                                *position,
-                            )));
-                        }
-                    }
-                    (None, None) => {
-                        let field = CsharpClassField {
-                            name: "type".to_string(),
-                            ..Default::default()
-                        };
-                        let fields = vec![field];
-
-                        return Some(CompletionResponse::Array(get_field_completion(
-                            fields,
-                            block_mapping_node,
-                            *position,
-                        )));
-                    }
-                    _ => return None,
-                }
+            if key != "type" {
+                continue;
             }
 
-            return None;
+            name = Some(value);
+            break;
         }
-        _ => {
-            tracing::trace!("Not a single match.");
-            return None;
+
+        name
+    }
+
+    fn get_specified_fields<'a>(&'a self, block_mapping_node: &Node) -> Vec<&'a str> {
+        let children_count = block_mapping_node.named_child_count();
+        let mut fields = Vec::with_capacity(children_count);
+        for i in 0..children_count {
+            let child = block_mapping_node.child(i).unwrap();
+            if child.kind() == "block_mapping_pair" {
+                let key_node = child.child_by_field_name("key");
+                if let Some(key_node) = key_node {
+                    fields.push(key_node.utf8_text(self.src.as_bytes()).unwrap());
+                }
+            }
+        }
+        fields
+    }
+
+    fn block_sequence_item(&self, node: Node) -> CompletionResult {
+        Some(CompletionResponse::Array(vec![CompletionItem {
+            label: "type".to_owned(),
+            kind: Some(CompletionItemKind::FIELD),
+            detail: Some("string".to_owned()),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range: {
+                    let position =
+                        Position::new(self.position.line, node.start_position().column as u32 + 2);
+                    lsp_types::Range {
+                        start: position,
+                        end: position,
+                    }
+                },
+                new_text: format!("type: "),
+            })),
+            ..Default::default()
+        }]))
+    }
+
+    fn block_mapping_pair(&self, node: Node) -> CompletionResult {
+        let nest = self.get_nesting(&node);
+        let key_node = node.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        if key_name == "type" {
+            match nest {
+                2 => return self.prototype_completion(node, key_node),
+                4 => return self.components_completion(node, key_node),
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    fn block_mapping(&self, node: Node) -> CompletionResult {
+        let nest = self.get_nesting(&node);
+
+        if nest > 2 {
+            None
+        } else {
+            self.prototype_fields_completion(node)
         }
     }
 
-    None
-}
+    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
+        let proto = {
+            let mut proto = None;
+            let children_count = node.named_child_count();
 
-fn get_field_completion(
-    fields: Vec<CsharpClassField>,
-    block_mapping_node: Node,
-    position: Position,
-) -> Vec<CompletionItem> {
-    fields
-        .into_par_iter()
-        .map(|f| {
-            let name = f.get_data_field_name();
+            for i in 0..children_count {
+                let field_node = node.named_child(i)?;
+                let key_node = field_node.child_by_field_name("key");
+                let value_node = field_node.child_by_field_name("value");
 
-            CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::FIELD),
-                detail: Some(f.type_name),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: {
-                        let position = Position::new(
-                            position.line,
-                            block_mapping_node.start_position().column as u32,
-                        );
-                        lsp_types::Range {
-                            start: position,
-                            end: position,
+                let (key, value) = match (key_node, value_node) {
+                    (Some(key_node), Some(value_node)) => (
+                        key_node.utf8_text(self.src.as_bytes()).ok()?,
+                        value_node.utf8_text(self.src.as_bytes()).ok()?,
+                    ),
+                    _ => continue,
+                };
+
+    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
+        let proto_name = self.get_object_name(&node)?;
+            let specified_fields = self.get_specified_fields(&node);
+            let reflection = ReflectionManager::new(self.classes.clone());
+        let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
+                let fields = block(|| reflection.get_fields(&proto))
+                    .into_par_iter()
+                    .filter(|f| f.attributes.contains("DataField"))
+                    .chain([CsharpClassField {
+                        name: "id".to_owned(),
+                        type_name: "string".to_owned(),
+                        ..Default::default()
+                    }])
+                    .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
+                    .map(|f| {
+                        let name = f.get_data_field_name();
+
+                        CompletionItem {
+                            label: name.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            detail: Some(f.type_name),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: {
+                                    let position = Position::new(
+                                        self.position.line,
+                                        node.start_position().column as u32,
+                                    );
+                                    lsp_types::Range {
+                                        start: position,
+                                        end: position,
+                                    }
+                                },
+                                new_text: format!("{name}: "),
+                            })),
+                            sort_text: if f.name == "id" || f.name == "components" {
+                                Some("0".to_owned())
+                            } else {
+                                Some("1".to_owned())
+                            },
+                            ..Default::default()
                         }
-                    },
-                    new_text: format!("{name}: "),
-                })),
-                sort_text: if f.name == "id" || f.name == "components" {
-                    Some("0".to_owned())
-                } else {
-                    Some("1".to_owned())
-                },
-                ..Default::default()
-            }
-        })
-        .collect()
-}
+                    })
+                    .collect::<Vec<_>>();
 
-fn get_type_completion(
-    classes: CsharpClasses,
-    capture: &QueryCapture,
-    key_node: Node,
-    position: Position,
-    src: &str,
-) -> Vec<CompletionItem> {
-    let value_node = capture
-        .node
-        .child_by_field_name("value")
-        .map(|node| node.utf8_text(src.as_bytes()).unwrap());
-
-    let lock = tokio::task::block_in_place(|| classes.blocking_read());
-    let completions = lock
-        .par_iter()
-        .filter_map(|c| Prototype::try_from(c).ok())
-        .filter(|p| {
-            if let Some(value) = value_node {
-                let name = p.get_prototype_name().to_lowercase();
-                let diff = strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
-
-                diff < name.len()
+        if fields.len() > 0 {
+            Some(CompletionResponse::Array(fields))
             } else {
-                true
-            }
-        })
-        .map(|p| {
-            let name = p.get_prototype_name();
+            None
+        }
+    }
 
-            CompletionItem {
-                label: name.to_owned(),
-                kind: Some(CompletionItemKind::VALUE),
-                label_details: Some(CompletionItemLabelDetails {
-                    detail: Some("Prototype".to_owned()),
-                    ..Default::default()
-                }),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: {
-                        let position =
-                            Position::new(position.line, key_node.end_position().column as u32 + 2);
-                        lsp_types::Range {
-                            start: position,
-                            end: position,
-                        }
-                    },
-                    new_text: camel_case(name.as_str()),
-                })),
-                sort_text: if name.to_lowercase() == "entity" {
-                    Some("0".to_owned())
+    fn prototype_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+        let value_node = node
+            .child_by_field_name("value")
+            .map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
+
+        let lock = tokio::task::block_in_place(|| self.classes.blocking_read());
+        let completions = lock
+            .par_iter()
+            .filter_map(|c| Prototype::try_from(c).ok())
+            .filter(|p| {
+                if let Some(value) = value_node {
+                    let name = p.get_prototype_name().to_lowercase();
+                    let diff = strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
+
+                    diff < name.len()
                 } else {
-                    Some("1".to_owned())
-                },
-                ..Default::default()
-            }
-        })
-        .collect::<Vec<_>>();
+                    true
+                }
+            })
+            .map(|p| {
+                let name = p.get_prototype_name();
 
-    completions
+                CompletionItem {
+                    label: name.to_owned(),
+                    kind: Some(CompletionItemKind::VALUE),
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some("Prototype".to_owned()),
+                        ..Default::default()
+                    }),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: {
+                            let position = Position::new(
+                                self.position.line,
+                                key_node.end_position().column as u32 + 2,
+                            );
+                            lsp_types::Range {
+                                start: position,
+                                end: position,
+                            }
+                        },
+                        new_text: camel_case(name.as_str()),
+                    })),
+                    sort_text: if name.to_lowercase() == "entity" {
+                        Some("0".to_owned())
+                    } else {
+                        Some("1".to_owned())
+                    },
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Some(CompletionResponse::Array(completions))
+    }
+
+    fn components_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+        let is_components_node = {
+            let mut node = node;
+            for _ in 0..6 {
+                node = node.parent()?;
+            }
+            if node.kind() != "block_mapping_pair" {
+                false
+            } else {
+                let key_node = node.child_by_field_name("key")?;
+                let key_value = key_node.utf8_text(self.src.as_bytes()).ok()?;
+                key_value == "components"
+            }
+        };
+
+        if !is_components_node {
+            return None;
+        }
+
+        let value = node
+            .child_by_field_name("value")
+            .map(|node| node.utf8_text(self.src.as_bytes()).unwrap());
+
+        let lock = tokio::task::block_in_place(|| self.classes.blocking_read());
+        let completions = lock
+            .par_iter()
+            .filter_map(|c| Component::try_from(c).ok())
+            .filter(|c| {
+                if let Some(value) = value {
+                    let name = c.get_component_name().to_lowercase();
+                    let diff = strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
+
+                    diff < name.len()
+                } else {
+                    true
+                }
+            })
+            .map(|c| {
+                let name = c.get_component_name();
+
+                CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::VALUE),
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some("Component".to_owned()),
+                        ..Default::default()
+                    }),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: {
+                            let position = Position::new(
+                                self.position.line,
+                                key_node.end_position().column as u32 + 2,
+                            );
+                            lsp_types::Range {
+                                start: position,
+                                end: position,
+                            }
+                        },
+                        new_text: name,
+                    })),
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Some(CompletionResponse::Array(completions))
+    }
+}
+
+impl Completion for YamlCompletion {
+    fn completion(&self) -> CompletionResult {
+        let (start_col, end_col) = {
+            // Calculate the position for the correct node search.
+            // P.S. Why on tree-sitter playground everything works correctly (in javascript)
+            // even without dancing with tambourine - idk.
+            let line = self
+                .src
+                .lines()
+                .nth(self.position.line as usize)
+                .unwrap_or_default();
+
+            // If the string is empty, we use the cursor coordinates
+            // and minus them by one, otherwise the root node `stream` will be searched.
+            let trim_str = line.trim();
+            if trim_str.len() == 0 {
+                let col = if self.position.character == 0 {
+                    self.position.character
+                } else {
+                    self.position.character - 1
+                } as usize;
+
+                (col, col)
+
+            // If the string starts with `-`, we try to find the coordinate starting before
+            // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
+            } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
+                let mut col = 0;
+                let mut chars = line.chars();
+                while let Some(ch) = chars.next() {
+                    tracing::trace!("Char: {ch}");
+                    if ch == '-' {
+                        break;
+                    }
+                    col += 1;
+                }
+                (col, col)
+
+            // If the string is not empty, we catch the beginning of the text
+            // and the end of the text to properly search for child nodes.
+            } else {
+                let mut scol = line.chars().count();
+                let mut ecol = scol;
+                let mut chars = line.chars();
+                let mut text = false;
+                while let Some(ch) = chars.next_back() {
+                    if scol == 0 {
+                        break;
+                    }
+                    scol -= 1;
+
+                    if !ch.is_whitespace() {
+                        text = true;
+                    } else if text && ch.is_whitespace() {
+                        break;
+                    }
+
+                    if !text {
+                        ecol -= 1;
+                    }
+                }
+
+                (scol + 1, ecol)
+            }
+        };
+        let start_point = Point::new(self.position.line as usize, start_col);
+        let end_point = Point::new(self.position.line as usize, end_col);
+        tracing::trace!("Search range: {start_point:?} - {end_point:?}");
+
+        let root_node = self.tree.root_node();
+        let found_node = root_node.named_descendant_for_point_range(start_point, end_point);
+
+        if found_node.is_none() {
+            return None;
+        }
+
+        // If a text node was found, we climb to the parent node,
+        // or an error node, we terminate altogether.
+        let found_node = {
+            let mut node = found_node.unwrap();
+            tracing::trace!("Found node: {node:#?}");
+            if node.kind() == "string_scalar" {
+                for _ in 0..3 {
+                    node = node.parent().unwrap();
+                }
+            }
+            if node.kind() == "ERROR" {
+                return None;
+            }
+            node
+        };
+
+        tracing::trace!("Work with node {found_node}");
+
+        match found_node.kind() {
+            "block_mapping_pair" => self.block_mapping_pair(found_node),
+            "block_mapping" => self.block_mapping(found_node),
+            "block_sequence_item" => self.block_sequence_item(found_node),
+            _ => return None,
+        }
+    }
 }

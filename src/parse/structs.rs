@@ -6,7 +6,7 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelI
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
-    ops::{Deref, DerefMut},
+    ops::Deref,
 };
 
 pub struct ReflectionManager {
@@ -18,14 +18,14 @@ impl ReflectionManager {
         Self { classes }
     }
 
-    pub async fn get_fields(&self, prototype: &Prototype) -> Vec<CsharpClassField> {
+    pub async fn get_fields(&self, class: &CsharpClass) -> Vec<CsharpClassField> {
         let lock = self.classes.read().await;
-        let bases = prototype
+        let bases = class
             .base
             .par_iter()
             .map(|b| lock.par_iter().find_any(|c| c.name == *b))
             .filter_map(|c| c)
-            .chain([&prototype.class])
+            .chain([class])
             .collect::<Vec<_>>();
 
         let mut fields = Vec::with_capacity(bases.len());
@@ -61,11 +61,8 @@ impl ReflectionManager {
             }
         });
 
-        if let Some(class) = class {
-            return Prototype::try_from(class).ok();
-        }
-
-        None
+        Prototype::try_from(class?).ok()
+    }
     }
 }
 
@@ -127,6 +124,46 @@ impl Extend<CsharpAttribute> for CsharpAttributeCollection {
     }
 }
 
+pub struct Component<'class> {
+    class: &'class CsharpClass,
+}
+
+impl<'class> Component<'class> {
+    pub fn get_component_name(&self) -> String {
+        let name = self
+            .class
+            .name
+            .strip_suffix("Component")
+            .unwrap_or(self.class.name.as_str());
+
+        stringcase::pascal_case(name)
+    }
+}
+
+impl<'class> TryFrom<&'class CsharpClass> for Component<'class> {
+    type Error = ();
+
+    fn try_from(class: &'class CsharpClass) -> Result<Self, Self::Error> {
+        if class.attributes.contains("RegisterComponent")
+            && class.base.contains(&"Component".to_owned())
+            || class.base.contains(&"IComponent".to_owned())
+        {
+            Ok(Component { class })
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl<'class> Deref for Component<'class> {
+    type Target = CsharpClass;
+
+    fn deref(&self) -> &Self::Target {
+        &self.class
+    }
+}
+
+#[derive(Debug)]
 pub struct Prototype {
     class: CsharpClass,
 }
@@ -175,12 +212,6 @@ impl Deref for Prototype {
 
     fn deref(&self) -> &Self::Target {
         &self.class
-    }
-}
-
-impl DerefMut for Prototype {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.class
     }
 }
 

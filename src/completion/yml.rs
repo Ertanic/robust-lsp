@@ -1,7 +1,12 @@
+use std::{env, fs, path::PathBuf};
+
 use super::{Completion, CompletionResult};
 use crate::{
     backend::{CsharpClasses, YamlPrototypes},
-    parse::structs::csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
+    parse::structs::{
+        csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
+        json::RsiMeta,
+    },
     utils::block,
 };
 use rayon::prelude::*;
@@ -12,6 +17,8 @@ use tower_lsp::lsp_types::{
     CompletionResponse, CompletionTextEdit, Position, TextEdit,
 };
 use tree_sitter::{Node, Parser, Point, Tree};
+
+const SPRITES_RES_PATH: &str = "Resources/Textures/";
 
 pub struct YamlCompletion {
     classes: CsharpClasses,
@@ -229,6 +236,24 @@ impl YamlCompletion {
         nest
     }
 
+    fn get_field<'a>(&self, node: &Node<'a>, name: &str) -> Option<Node<'a>> {
+        debug_assert_eq!(node.kind(), "block_mapping");
+
+        for i in 0..node.named_child_count() {
+            let field_node = node.named_child(i)?;
+            let key = field_node
+                .child_by_field_name("key")?
+                .utf8_text(self.src.as_bytes())
+                .ok()?
+                .to_owned();
+
+            if key == name {
+                return Some(field_node);
+            }
+        }
+        None
+    }
+
     fn get_object_name(&self, node: &Node) -> Option<&str> {
         debug_assert_eq!(node.kind(), "block_mapping");
 
@@ -302,7 +327,7 @@ impl YamlCompletion {
     fn block_sequence_item(&self, node: Node) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_sequence_item");
 
-        if self.get_nesting(&node) > 2 {
+        if self.get_nesting(&node) > 4 {
             None
         } else {
             Some(CompletionResponse::Array(vec![CompletionItem {
@@ -343,7 +368,7 @@ impl YamlCompletion {
         } else if key_name == "parent" && nest == 2 {
             self.prototype_parents_completion(node)
         } else {
-            self.field_type_completion(node)
+            self.object_field_type_completion(node)
         }
     }
 
@@ -367,29 +392,293 @@ impl YamlCompletion {
         self.prototype_parents_completion(node)
     }
 
-    fn field_type_completion(&self, node: Node) -> CompletionResult {
+    fn object_field_type_completion(&self, node: Node) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
+        let key_node = node.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+        let mapping_node = node.parent()?;
+        let obj_name = self.get_object_name(&mapping_node)?;
+        let reflection = ReflectionManager::new(self.classes.clone());
+
         match self.get_nesting(&node) {
-            2 => self.prototype_field_type_completion(node),
+            2 => self.prototype_field_type_completion(node, reflection, obj_name, key_name),
+            4 => self.component_field_type_completion(node, reflection, obj_name, key_name),
             _ => None,
         }
     }
 
-    fn prototype_field_type_completion(&self, node: Node) -> CompletionResult {
+    fn component_field_type_completion(
+        &self,
+        node: Node,
+        reflection: ReflectionManager,
+        object_name: &str,
+        key_name: &str,
+    ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
-        
-        let key_node = node.child_by_field_name("key")?;
-        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
-        let mapping_node = node.parent()?;
-        let proto_name = self.get_object_name(&mapping_node)?;
+        let comp = block(|| reflection.get_component_by_name(object_name))?;
+        let field = block(|| reflection.get_fields(&comp))
+            .into_iter()
+            .find(|f| f.get_data_field_name() == key_name)?;
 
-        let reflection = ReflectionManager::new(self.classes.clone());
-        let prototype = block(|| reflection.get_prototype_by_name(proto_name))?;
+        match (
+            comp.get_component_name().as_str(),
+            field.get_data_field_name().as_str(),
+        ) {
+            ("Sprite" | "Icon", "sprite") => self.sprite_field_type_completion(node),
+            ("Sprite", "state") => self.state_field_type_completion(node),
+            _ => self.field_type_completion(node, field, reflection),
+        }
+    }
+
+    fn state_field_type_completion(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
+        let current_folder = env::current_dir().ok()?;
+        let sprites_folder = current_folder.join(SPRITES_RES_PATH);
+        if !sprites_folder.exists() {
+            return None;
+        }
+
+        let sprite_node = self
+            .get_field(&node.parent()?, "sprite")?
+            .child_by_field_name("value")?;
+        let sprite_path = sprite_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        if !sprite_path.ends_with(".rsi") {
+            return None;
+        }
+
+        let path = sprites_folder.join(sprite_path);
+        if !path.exists() || !path.is_dir() {
+            return None;
+        }
+
+        let rsi_name = path.file_name()?.to_string_lossy().into_owned();
+        let meta_path = path.join("meta.json");
+
+        if !meta_path.exists() || !meta_path.is_file() {
+            return None;
+        }
+
+        let meta: RsiMeta = serde_json::from_reader(fs::File::open(meta_path).ok()?).ok()?;
+
+        let map = |s: String| CompletionItem {
+            label: s,
+            kind: Some(CompletionItemKind::VALUE),
+            detail: Some(rsi_name.clone()),
+            ..Default::default()
+        };
+
+        let states = match node.child_by_field_name("value") {
+            Some(value_node) => {
+                let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                let mut states = meta
+                    .states
+                    .into_iter()
+                    .map(|s| (strsim::jaro_winkler(value, &s.name), s.name))
+                    .filter(|(diff, _)| *diff > 0.6)
+                    .map(|(diff, s)| (diff, map(s)))
+                    .collect::<Vec<_>>();
+
+                states.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                states.reverse();
+
+                states.into_iter().map(|(_, s)| s).collect::<Vec<_>>()
+            }
+            None => {
+                let states = meta
+                    .states
+                    .into_iter()
+                    .map(|s| map(s.name))
+                    .collect::<Vec<_>>();
+
+                states
+            }
+        };
+
+        if states.is_empty() {
+            None
+        } else {
+            Some(CompletionResponse::Array(states))
+        }
+    }
+
+    fn sprite_field_type_completion(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
+        let current_folder = env::current_dir().ok()?;
+        let sprites_folder = current_folder.join(SPRITES_RES_PATH);
+        if !sprites_folder.exists() {
+            return None;
+        }
+
+        let paths = match node.child_by_field_name("value") {
+            Some(value_node) => {
+                let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                if value.ends_with('/') {
+                    let path = sprites_folder.join(value);
+                    if !path.exists() || !path.is_dir() {
+                        return None;
+                    }
+
+                    let last = value.split('/').filter(|s| !s.is_empty()).last()?;
+                    if last.ends_with(".rsi") {
+                        return None;
+                    }
+
+                    let paths = fs::read_dir(path)
+                        .ok()?
+                        .filter_map(Result::ok)
+                        .map(|f| {
+                            let path = f.path();
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            let is_rsi = name.ends_with(".rsi");
+                            CompletionItem {
+                                label: name.clone(),
+                                kind: Some(if is_rsi {
+                                    CompletionItemKind::FILE
+                                } else {
+                                    CompletionItemKind::FOLDER
+                                }),
+                                insert_text: Some(if is_rsi { name } else { format!("{name}/") }),
+                                ..Default::default()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    paths
+                } else {
+                    let parts = value
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
+                    let last = parts.last()?.to_owned();
+
+                    if last.ends_with(".rsi") {
+                        return None;
+                    }
+
+                    let parts_count = parts.len();
+                    let sprites_path = if parts_count == 1 {
+                        sprites_folder
+                    } else {
+                        sprites_folder
+                            .join(parts.into_iter().take(parts_count - 1).collect::<PathBuf>())
+                    };
+                    if !sprites_path.exists() || !sprites_path.is_dir() {
+                        return None;
+                    }
+
+                    let mut paths = fs::read_dir(sprites_path)
+                        .ok()?
+                        .filter_map(Result::ok)
+                        .map(|f| {
+                            let path = f.path();
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            (strsim::jaro_winkler(last, &name), name)
+                        })
+                        .filter(|(diff, _)| *diff > 0.6)
+                        .map(|(diff, name)| {
+                            let is_rsi = name.ends_with(".rsi");
+                            (
+                                diff,
+                                CompletionItem {
+                                    label: name.clone(),
+                                    kind: Some(if is_rsi {
+                                        CompletionItemKind::FILE
+                                    } else {
+                                        CompletionItemKind::FOLDER
+                                    }),
+                                    insert_text: Some(if is_rsi {
+                                        name
+                                    } else {
+                                        format!("{name}/")
+                                    }),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>();
+
+                    paths.sort_by_key(|p| (p.0 * 100.0) as u32);
+                    paths.reverse();
+                    paths.truncate(100);
+
+                    paths.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
+                }
+            }
+            None => {
+                let paths = fs::read_dir(sprites_folder)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .map(|f| {
+                        let path = f.path();
+                        let name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        CompletionItem {
+                            label: name.clone(),
+                            kind: Some(if path.is_dir() {
+                                CompletionItemKind::FOLDER
+                            } else {
+                                CompletionItemKind::FILE
+                            }),
+                            insert_text: Some(format!("{name}/")),
+                            ..Default::default()
+                        }
+                    })
+                    .collect();
+
+                paths
+            }
+        };
+
+        if !paths.is_empty() {
+            Some(CompletionResponse::List(CompletionList {
+                is_incomplete: true,
+                items: paths,
+            }))
+        } else {
+            None
+        }
+    }
+
+    fn prototype_field_type_completion(
+        &self,
+        node: Node,
+        reflection: ReflectionManager,
+        object_name: &str,
+        key_name: &str,
+    ) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
+        let prototype = block(|| reflection.get_prototype_by_name(object_name))?;
         let field = block(|| reflection.get_fields(&prototype))
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
+
+        self.field_type_completion(node, field, reflection)
+    }
+
+    fn field_type_completion(
+        &self,
+        node: Node,
+        field: CsharpClassField,
+        reflection: ReflectionManager,
+    ) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         match field.type_name.trim_end_matches('?') {
             "bool" => Some(CompletionResponse::Array(
@@ -686,7 +975,9 @@ impl YamlCompletion {
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
         let fields = block(|| reflection.get_fields(&comp))
             .into_par_iter()
-            .filter(|f| f.attributes.contains("DataField"))
+            .filter(|f| {
+                f.attributes.contains("DataField") || f.attributes.contains("IncludeDataField")
+            })
             .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
             .map(|f| {
                 let name = f.get_data_field_name();

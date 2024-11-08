@@ -333,6 +333,11 @@ impl CsharpClassField {
                     return name.trim_matches('"').to_owned();
                 }
             }
+        } else if self.attributes.contains("IncludeDataField") {
+            match self.type_name.trim_end_matches('?') {
+                "SpriteSpecifier.Rsi" | "SpriteSpecifier" => return "sprite".to_owned(),
+                _ => {}
+            }
         }
 
         stringcase::camel_case(&self.name)

@@ -336,7 +336,7 @@ impl YamlCompletion {
         } else if key_name == "parent" && nest == 2 {
             self.prototype_parents_completion(node)
         } else {
-            None
+            self.field_type_completion(node)
         }
     }
 
@@ -356,6 +356,141 @@ impl YamlCompletion {
 
     fn flow_sequence(&self, node: Node) -> CompletionResult {
         self.prototype_parents_completion(node)
+    }
+
+    fn field_type_completion(&self, node: Node) -> CompletionResult {
+        let nest = self.get_nesting(&node);
+
+        match nest {
+            2 => self.prototype_field_type_completion(node),
+            _ => None,
+        }
+    }
+
+    fn prototype_field_type_completion(&self, node: Node) -> CompletionResult {
+        let key_node = node.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        let mapping_node = node.parent()?;
+        let proto_name = self.get_object_name(&mapping_node)?;
+
+        let reflection = ReflectionManager::new(self.classes.clone());
+        let prototype = block(|| reflection.get_prototype_by_name(proto_name))?;
+        let field = block(|| reflection.get_fields(&prototype))
+            .into_iter()
+            .find(|f| f.get_data_field_name() == key_name)?;
+
+        match field.type_name.trim_end_matches('?') {
+            "bool" => Some(CompletionResponse::Array(
+                vec!["true", "false"]
+                    .into_iter()
+                    .map(|value| CompletionItem {
+                        label: value.to_string(),
+                        kind: Some(CompletionItemKind::VALUE),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            "EntProtoId" => {
+                let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+                let entity_prototypes = lock.par_iter().filter(|p| p.prototype == "entity");
+
+                let prototypes = match node.child_by_field_name("value") {
+                    Some(value_node) => {
+                        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                        let mut prototypes = entity_prototypes
+                            .map(|p| (strsim::jaro_winkler(value, p.id.as_str()), p))
+                            .filter(|(similarity, _)| *similarity > 0.6)
+                            .map(|(d, p)| {
+                                (
+                                    d,
+                                    CompletionItem {
+                                        label: p.id.clone(),
+                                        kind: Some(CompletionItemKind::CLASS),
+                                        detail: Some("entity".to_owned()),
+                                        ..Default::default()
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        prototypes.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                        prototypes.reverse();
+                        prototypes.truncate(100);
+
+                        prototypes.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
+                    }
+                    None => {
+                        let mut prototypes = entity_prototypes
+                            .map(|p| CompletionItem {
+                                label: p.id.clone(),
+                                kind: Some(CompletionItemKind::CLASS),
+                                detail: Some("entity".to_owned()),
+                                ..Default::default()
+                            })
+                            .collect::<Vec<_>>();
+                        prototypes.truncate(100);
+
+                        prototypes
+                    }
+                };
+
+                Some(CompletionResponse::List(CompletionList {
+                    is_incomplete: true,
+                    items: prototypes,
+                }))
+            }
+            value if value.starts_with("ProtoId<") => {
+                let inner = value.trim_start_matches("ProtoId<").trim_end_matches('>');
+                let prototype = block(|| reflection.get_prototype_by_name(inner))?;
+                let prototype_name = camel_case(&prototype.get_prototype_name());
+
+                let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+                let filtered_prototypes = lock.par_iter().filter(|p| p.prototype == prototype_name);
+
+                let map = |l: String| CompletionItem {
+                    label: l,
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some(prototype_name.clone()),
+                    ..Default::default()
+                };
+
+                let prototypes = match node.child_by_field_name("value") {
+                    Some(value_node) => {
+                        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                        let mut prototypes = filtered_prototypes
+                            .map(|p| (strsim::jaro_winkler(value, &p.id), p))
+                            .filter(|(diff, _)| *diff > 0.6)
+                            .map(|(d, p)| (d, map(p.id.clone())))
+                            .collect::<Vec<_>>();
+
+                        prototypes.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                        prototypes.reverse();
+                        prototypes.truncate(100);
+
+                        prototypes.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
+                    }
+                    None => {
+                        let mut prototypes = filtered_prototypes
+                            .map(|p| map(p.id.clone()))
+                            .collect::<Vec<_>>();
+
+                        prototypes.truncate(100);
+                        prototypes
+                    }
+                };
+
+                if prototypes.is_empty() {
+                    None
+                } else {
+                    Some(CompletionResponse::List(CompletionList {
+                        is_incomplete: true,
+                        items: prototypes,
+                    }))
+                }
+            }
+            _ => None,
+        }
     }
 
     // Is that even a little bit readable? I don't know how else to rewrite it better...

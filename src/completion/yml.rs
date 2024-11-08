@@ -1,6 +1,6 @@
 use super::{Completion, CompletionResult};
 use crate::{
-    backend::CsharpClasses,
+    backend::{CsharpClasses, YamlPrototypes},
     parse::structs::csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
     utils::block,
 };
@@ -8,20 +8,26 @@ use rayon::prelude::*;
 use ropey::Rope;
 use stringcase::camel_case;
 use tower_lsp::lsp_types::{
-    self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionResponse,
-    CompletionTextEdit, Position, TextEdit,
+    self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
+    CompletionResponse, CompletionTextEdit, Position, TextEdit,
 };
 use tree_sitter::{Node, Parser, Point, Tree};
 
 pub struct YamlCompletion {
     classes: CsharpClasses,
+    prototypes: YamlPrototypes,
     position: Position,
     src: String,
     tree: Tree,
 }
 
 impl YamlCompletion {
-    pub fn new(classes: CsharpClasses, position: Position, src: &Rope) -> Self {
+    pub fn new(
+        classes: CsharpClasses,
+        prototypes: YamlPrototypes,
+        position: Position,
+        src: &Rope,
+    ) -> Self {
         let src = src.to_string();
 
         let mut parser = Parser::new();
@@ -30,6 +36,7 @@ impl YamlCompletion {
 
         Self {
             classes,
+            prototypes,
             position,
             src,
             tree,
@@ -93,24 +100,54 @@ impl YamlCompletion {
         fields
     }
 
+    fn get_specified_parents(&self, node: &Node) -> Option<Vec<&str>> {
+        let mut parents = Vec::new();
+
+        match node.kind() {
+            "block_mapping_pair" => {
+                let value_node = node.child_by_field_name("value")?;
+                let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                parents.push(value);
+                Some(parents)
+            }
+            "flow_sequence" => {
+                for i in 0..node.named_child_count() {
+                    let child = node.named_child(i).unwrap();
+                    let value = child.utf8_text(self.src.as_bytes()).ok()?;
+                    parents.push(value);
+                }
+                Some(parents)
+            }
+            _ => None,
+        }
+    }
+
     fn block_sequence_item(&self, node: Node) -> CompletionResult {
-        Some(CompletionResponse::Array(vec![CompletionItem {
-            label: "type".to_owned(),
-            kind: Some(CompletionItemKind::FIELD),
-            detail: Some("string".to_owned()),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                range: {
-                    let position =
-                        Position::new(self.position.line, node.start_position().column as u32 + 2);
-                    lsp_types::Range {
-                        start: position,
-                        end: position,
-                    }
-                },
-                new_text: format!("type: "),
-            })),
-            ..Default::default()
-        }]))
+        let nest = self.get_nesting(&node);
+
+        if nest > 2 {
+            None
+        } else {
+            Some(CompletionResponse::Array(vec![CompletionItem {
+                label: "type".to_owned(),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some("string".to_owned()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: {
+                        let position = Position::new(
+                            self.position.line,
+                            node.start_position().column as u32 + 2,
+                        );
+                        lsp_types::Range {
+                            start: position,
+                            end: position,
+                        }
+                    },
+                    new_text: format!("type: "),
+                })),
+                ..Default::default()
+            }]))
+        }
     }
 
     fn block_mapping_pair(&self, node: Node) -> CompletionResult {
@@ -122,11 +159,13 @@ impl YamlCompletion {
             match nest {
                 2 => return self.prototype_completion(node, key_node),
                 4 => return self.components_completion(node, key_node),
-                _ => {}
+                _ => None,
             }
+        } else if key_name == "parent" && nest == 2 {
+            self.prototype_parents_completion(node)
+        } else {
+            None
         }
-
-        None
     }
 
     fn block_mapping(&self, node: Node) -> CompletionResult {
@@ -139,9 +178,253 @@ impl YamlCompletion {
         }
     }
 
+    fn flow_node(&self, node: Node) -> CompletionResult {
+        self.prototype_parents_completion(node)
+    }
+
+    fn flow_sequence(&self, node: Node) -> CompletionResult {
+        self.prototype_parents_completion(node)
+    }
+
+    // TODO: Rewrite it into something more understandable...
+    fn prototype_parents_completion(&self, node: Node) -> CompletionResult {
+        match node.kind() {
+            "flow_sequence" => {
+                let parent_node = node.parent()?.prev_named_sibling()?;
+                if parent_node.utf8_text(self.src.as_bytes()).ok() != Some("parent") {
+                    return None;
+                }
+
+                let proto = self.get_object_name(&parent_node.parent()?.parent()?)?;
+                let specified_parents = self.get_specified_parents(&node).unwrap_or_default();
+                let mut parents = tokio::task::block_in_place(|| self.prototypes.blocking_read())
+                    .par_iter()
+                    .filter(|p| p.prototype == proto)
+                    .filter(|p| !specified_parents.contains(&p.id.as_str()))
+                    .map(|p| {
+                        let mut is_comma = false;
+                        let mut is_flow_node = false;
+                        CompletionItem {
+                            label: p.id.clone(),
+                            kind: Some(CompletionItemKind::CLASS),
+                            detail: Some(p.prototype.clone()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: {
+                                    let child_count = node.child_count();
+                                    let last_child = if child_count > 1 {
+                                        node.child(child_count - 2)
+                                    } else {
+                                        None
+                                    };
+
+                                    let position = Position::new(
+                                        self.position.line,
+                                        if let Some(last_child) = last_child {
+                                            if last_child.kind() == "," {
+                                                is_comma = true;
+                                                last_child.end_position().column as u32 + 1
+                                            } else if last_child.kind() == "flow_node" {
+                                                is_flow_node = true;
+                                                last_child.end_position().column as u32
+                                            } else {
+                                                last_child.end_position().column as u32 + 1
+                                            }
+                                        } else {
+                                            node.start_position().column as u32 + 1
+                                        },
+                                    );
+                                    lsp_types::Range {
+                                        start: position,
+                                        end: position,
+                                    }
+                                },
+                                new_text: if is_comma {
+                                    p.id.clone()
+                                } else if is_flow_node {
+                                    format!(", {}", p.id)
+                                } else {
+                                    p.id.clone()
+                                },
+                            })),
+                            ..Default::default()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                parents.sort_by(|a, b| a.label.cmp(&b.label));
+                parents.truncate(100);
+
+                if !parents.is_empty() {
+                    Some(CompletionResponse::List(CompletionList {
+                        is_incomplete: true,
+                        items: parents,
+                    }))
+                } else {
+                    None
+                }
+            }
+            "flow_node" => {
+                let parent_node = node.parent()?.parent()?.prev_named_sibling()?;
+                let parent_name = parent_node.utf8_text(self.src.as_bytes()).ok()?;
+                if parent_name != "parent" {
+                    return None;
+                }
+
+                let container_node = parent_node.parent()?.parent()?;
+                if container_node.kind() != "block_mapping" {
+                    return None;
+                }
+
+                let proto = self.get_object_name(&container_node)?;
+                let value = node.utf8_text(self.src.as_bytes()).ok()?;
+                let specified_parents = self
+                    .get_specified_parents(&node.parent()?)
+                    .unwrap_or_default();
+                let mut parents = tokio::task::block_in_place(|| self.prototypes.blocking_read())
+                    .par_iter()
+                    .filter(|p| p.prototype == proto)
+                    .filter(|p| !specified_parents.contains(&p.id.as_str()))
+                    .map(|p| (strsim::jaro_winkler(value, &p.id), p))
+                    .filter(|(diff, _)| diff > &0.6)
+                    .map(|(diff, p)| {
+                        (
+                            diff,
+                            CompletionItem {
+                                label: p.id.clone(),
+                                kind: Some(CompletionItemKind::CLASS),
+                                detail: Some(p.prototype.clone()),
+                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                    range: {
+                                        let position = Position::new(
+                                            self.position.line,
+                                            node.start_position().column as u32,
+                                        );
+                                        lsp_types::Range {
+                                            start: position,
+                                            end: position,
+                                        }
+                                    },
+                                    new_text: p.id.clone(),
+                                })),
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                parents.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                parents.reverse();
+                parents.truncate(100);
+
+                if !parents.is_empty() {
+                    Some(CompletionResponse::List(CompletionList {
+                        is_incomplete: true,
+                        items: parents.into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
+                    }))
+                } else {
+                    None
+                }
+            }
+            "block_mapping_pair" => match node.child_by_field_name("value") {
+                Some(value_node) => {
+                    let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                    let key_node = node.child_by_field_name("key")?;
+                    let proto = self.get_object_name(&node.parent().unwrap())?;
+                    let mut parents =
+                        tokio::task::block_in_place(|| self.prototypes.blocking_read())
+                            .par_iter()
+                            .filter(|p| p.prototype == proto)
+                            .map(|p| (strsim::jaro_winkler(value, &p.id), p))
+                            .filter(|(diff, _)| diff > &0.6)
+                            .map(|(diff, p)| {
+                                (
+                                    diff,
+                                    CompletionItem {
+                                        label: p.id.clone(),
+                                        kind: Some(CompletionItemKind::CLASS),
+                                        detail: Some(p.prototype.clone()),
+                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                            range: {
+                                                let position = Position::new(
+                                                    self.position.line,
+                                                    key_node.end_position().column as u32 + 2,
+                                                );
+                                                lsp_types::Range {
+                                                    start: position,
+                                                    end: position,
+                                                }
+                                            },
+                                            new_text: p.id.clone(),
+                                        })),
+                                        ..Default::default()
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                    parents.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                    parents.reverse();
+                    parents.truncate(100);
+
+                    if !parents.is_empty() {
+                        Some(CompletionResponse::List(CompletionList {
+                            is_incomplete: true,
+                            items: parents.into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
+                        }))
+                    } else {
+                        None
+                    }
+                }
+                None => {
+                    let key_node = node.child_by_field_name("key")?;
+                    let proto = self.get_object_name(&node.parent().unwrap())?;
+                    let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+                    let mut parents = lock
+                        .par_iter()
+                        .filter(|p| p.prototype == proto)
+                        .map(|p| CompletionItem {
+                            label: p.id.clone(),
+                            kind: Some(CompletionItemKind::CLASS),
+                            detail: Some(p.prototype.clone()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: {
+                                    let position = Position::new(
+                                        self.position.line,
+                                        key_node.end_position().column as u32 + 2,
+                                    );
+                                    lsp_types::Range {
+                                        start: position,
+                                        end: Position {
+                                            character: position.character + p.id.len() as u32,
+                                            ..position
+                                        },
+                                    }
+                                },
+                                new_text: p.id.clone(),
+                            })),
+                            ..Default::default()
+                        })
+                        .collect::<Vec<_>>();
+
+                    parents.sort_by(|a, b| a.label.cmp(&b.label));
+                    parents.truncate(100);
+
+                    if !parents.is_empty() {
+                        Some(CompletionResponse::List(CompletionList {
+                            is_incomplete: true,
+                            items: parents,
+                        }))
+                    } else {
+                        None
+                    }
+                }
+            },
+            _ => None,
+        }
+    }
+
     fn component_fields_completion(&self, node: Node) -> CompletionResult {
         let comp_name = self.get_object_name(&node)?;
-        tracing::trace!("Component name: {comp_name}");
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.classes.clone());
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
@@ -255,7 +538,7 @@ impl YamlCompletion {
 
                 CompletionItem {
                     label: name.to_owned(),
-                    kind: Some(CompletionItemKind::VALUE),
+                    kind: Some(CompletionItemKind::CLASS),
                     label_details: Some(CompletionItemLabelDetails {
                         detail: Some("Prototype".to_owned()),
                         ..Default::default()
@@ -328,7 +611,7 @@ impl YamlCompletion {
 
                 CompletionItem {
                     label: name.clone(),
-                    kind: Some(CompletionItemKind::VALUE),
+                    kind: Some(CompletionItemKind::CLASS),
                     label_details: Some(CompletionItemLabelDetails {
                         detail: Some("Component".to_owned()),
                         ..Default::default()
@@ -385,7 +668,6 @@ impl Completion for YamlCompletion {
                 let mut col = 0;
                 let mut chars = line.chars();
                 while let Some(ch) = chars.next() {
-                    tracing::trace!("Char: {ch}");
                     if ch == '-' {
                         break;
                     }
@@ -398,12 +680,23 @@ impl Completion for YamlCompletion {
             } else {
                 let mut scol = line.chars().count();
                 let mut ecol = scol;
-                let mut chars = line.chars();
+                let mut chars = {
+                    let mut c = line.chars();
+                    while let Some(_) = c.next_back() {
+                        scol -= 1;
+
+                        if scol == self.position.character as usize {
+                            break;
+                        } else if scol < self.position.character as usize {
+                            c.next();
+                            scol += 1;
+                            break;
+                        }
+                    }
+                    c
+                };
                 let mut text = false;
                 while let Some(ch) = chars.next_back() {
-                    if scol == 0 {
-                        break;
-                    }
                     scol -= 1;
 
                     if !ch.is_whitespace() {
@@ -417,12 +710,11 @@ impl Completion for YamlCompletion {
                     }
                 }
 
-                (scol + 1, ecol)
+                (scol + 1, ecol - 1)
             }
         };
         let start_point = Point::new(self.position.line as usize, start_col);
         let end_point = Point::new(self.position.line as usize, end_col);
-        tracing::trace!("Search range: {start_point:?} - {end_point:?}");
 
         let root_node = self.tree.root_node();
         let found_node = root_node.named_descendant_for_point_range(start_point, end_point);
@@ -447,12 +739,67 @@ impl Completion for YamlCompletion {
             node
         };
 
-        tracing::trace!("Work with node {found_node}");
+        tracing::trace!("Work with node {found_node:?}");
 
         match found_node.kind() {
             "block_mapping_pair" => self.block_mapping_pair(found_node),
             "block_mapping" => self.block_mapping(found_node),
             "block_sequence_item" => self.block_sequence_item(found_node),
+            "block_sequence" => {
+                let point = Point {
+                    row: if self.position.line == 0 {
+                        return None;
+                    } else {
+                        self.position.line as usize - 1
+                    },
+                    column: self.position.character as usize,
+                };
+                let found_node = {
+                    let mut node = found_node.named_descendant_for_point_range(point, point)?;
+                    if node.kind() == "block_mapping" {
+                        node
+                    } else {
+                        while let Some(n) = node.parent() {
+                            node = n;
+                            if n.kind() == "block_mapping" {
+                                break;
+                            }
+                        }
+                        node
+                    }
+                };
+
+                if found_node.kind() == "block_mapping" {
+                    self.block_mapping(found_node)
+                } else {
+                    None
+                }
+            }
+            "flow_sequence" => {
+                let point = Point {
+                    row: self.position.line as usize,
+                    column: self.position.character as usize - 1,
+                };
+                let found_node = {
+                    let mut node = found_node.named_descendant_for_point_range(point, point)?;
+                    if node.kind() != "flow_sequence" {
+                        while let Some(n) = node.parent() {
+                            node = n;
+
+                            if n.kind() == "flow_node" {
+                                break;
+                            }
+                        }
+                    }
+                    node
+                };
+
+                match found_node.kind() {
+                    "flow_node" => self.flow_node(found_node),
+                    "flow_sequence" => self.flow_sequence(found_node),
+                    _ => None,
+                }
+            }
             _ => return None,
         }
     }

@@ -248,7 +248,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let completion = YamlCompletion::new(self.classes.clone(), params.text_document_position.position, rope);
+                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position.position, rope);
                         Ok(completion.completion())
                     },
                     None => Ok(None)

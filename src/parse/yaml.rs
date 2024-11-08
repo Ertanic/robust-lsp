@@ -37,7 +37,6 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<
                     protos.push(prototype);
                 }
             }
-            tracing::trace!("{}\n{protos:#?}", path.display());
             return Ok(protos);
         }
     }
@@ -58,7 +57,10 @@ fn get_yaml_prototype(
         for i in 0..block_mapping_node.named_child_count() {
             let mapping_pair_node = block_mapping_node.named_child(i).unwrap();
 
-            let key_node = mapping_pair_node.child_by_field_name("key").unwrap();
+            let key_node = match mapping_pair_node.child_by_field_name("key") {
+                Some(n) => n,
+                None => continue,
+            };
             let key_name = key_node.utf8_text(src.as_bytes()).unwrap();
 
             let value_node = match mapping_pair_node.child_by_field_name("value") {
@@ -78,19 +80,26 @@ fn get_yaml_prototype(
                             None => continue,
                         };
 
-                        if sequence_node.kind() != "flow_sequence" {
-                            parents
-                                .push(sequence_node.utf8_text(src.as_bytes()).unwrap().to_owned());
-                            continue;
-                        }
-
-                        for i in 0..sequence_node.named_child_count() {
-                            let sequence_item_node = sequence_node.named_child(i).unwrap();
-                            match sequence_item_node.named_child(0) {
-                                Some(content_node) => parents.push(
-                                    content_node.utf8_text(src.as_bytes()).unwrap().to_owned(),
-                                ),
-                                None => continue,
+                        match sequence_node.kind() {
+                            "flow_sequence" | "block_sequence" => {
+                                for i in 0..sequence_node.named_child_count() {
+                                    let sequence_item_node = sequence_node.named_child(i).unwrap();
+                                    match sequence_item_node.named_child(0) {
+                                        Some(content_node) => parents.push(
+                                            content_node
+                                                .utf8_text(src.as_bytes())
+                                                .unwrap()
+                                                .to_owned(),
+                                        ),
+                                        None => continue,
+                                    }
+                                }
+                            }
+                            _ => {
+                                parents.push(
+                                    sequence_node.utf8_text(src.as_bytes()).unwrap().to_owned(),
+                                );
+                                continue;
                             }
                         }
                     }

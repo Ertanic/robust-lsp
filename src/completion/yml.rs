@@ -21,6 +21,130 @@ pub struct YamlCompletion {
     tree: Tree,
 }
 
+impl Completion for YamlCompletion {
+    fn completion(&self) -> CompletionResult {
+        let (start_col, end_col) = {
+            // Calculate the position for the correct node search.
+            // P.S. Why on tree-sitter playground everything works correctly (in javascript)
+            // even without dancing with tambourine - idk.
+            let line = self
+                .src
+                .lines()
+                .nth(self.position.line as usize)
+                .unwrap_or_default();
+
+            // If the string is empty, we use the cursor coordinates
+            // and minus them by one, otherwise the root node `stream` will be searched.
+            let trim_str = line.trim();
+            if trim_str.len() == 0 {
+                let col = if self.position.character == 0 {
+                    self.position.character
+                } else {
+                    self.position.character - 1
+                } as usize;
+
+                (col, col)
+
+            // If the string starts with `-`, we try to find the coordinate starting before
+            // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
+            } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
+                let mut col = 0;
+                let mut chars = line.chars();
+                while let Some(ch) = chars.next() {
+                    if ch == '-' {
+                        break;
+                    }
+                    col += 1;
+                }
+                (col, col)
+
+            // If the string is not empty, we catch the beginning of the text
+            // and the end of the text to properly search for child nodes.
+            } else {
+                let mut scol = line.chars().count();
+                let mut ecol = scol;
+                let mut chars = {
+                    let mut c = line.chars();
+                    while let Some(_) = c.next_back() {
+                        scol -= 1;
+
+                        if scol == self.position.character as usize {
+                            break;
+                        } else if scol < self.position.character as usize {
+                            c.next();
+                            scol += 1;
+                            break;
+                        }
+                    }
+                    c
+                };
+                let mut text = false;
+                while let Some(ch) = chars.next_back() {
+                    scol -= 1;
+
+                    if !ch.is_whitespace() {
+                        text = true;
+                    } else if text && ch.is_whitespace() {
+                        break;
+                    }
+
+                    if !text {
+                        ecol -= 1;
+                    }
+                }
+
+                (scol + 1, ecol - 1)
+            }
+        };
+        let start_point = Point::new(self.position.line as usize, start_col);
+        let end_point = Point::new(self.position.line as usize, end_col);
+
+        let root_node = self.tree.root_node();
+        let found_node = root_node.named_descendant_for_point_range(start_point, end_point);
+
+        if found_node.is_none() {
+            return None;
+        }
+
+        // If a text node was found, we climb to the parent node,
+        // or an error node, we terminate altogether.
+        let found_node = {
+            let mut node = found_node.unwrap();
+            tracing::trace!("Found node: {node:#?}");
+            if node.kind() == "string_scalar" {
+                for _ in 0..3 {
+                    node = node.parent().unwrap();
+                }
+            }
+            if node.kind() == "ERROR" {
+                return None;
+            }
+            node
+        };
+
+        tracing::trace!("Work with node {found_node:?}");
+
+        match found_node.kind() {
+            "block_mapping_pair" => self.block_mapping_pair(found_node),
+            "block_mapping" => self.block_mapping(found_node),
+            "block_sequence_item" => self.block_sequence_item(found_node),
+            "block_sequence" => {
+                let block_mapping = self.find_block_mapping(found_node)?;
+                self.block_mapping(block_mapping)
+            }
+            "flow_sequence" => {
+                let flow_item = self.find_flow_item(found_node)?;
+                match flow_item.kind() {
+                    "flow_node" => self.flow_node(flow_item),
+                    "flow_sequence" => self.flow_sequence(flow_item),
+                    _ => None,
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
 impl YamlCompletion {
     pub fn new(
         classes: CsharpClasses,
@@ -40,6 +164,54 @@ impl YamlCompletion {
             position,
             src,
             tree,
+        }
+    }
+
+    fn find_flow_item<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
+        let point = Point {
+            row: self.position.line as usize,
+            column: self.position.character as usize - 1,
+        };
+        let mut node = node.named_descendant_for_point_range(point, point)?;
+        if node.kind() != "flow_sequence" {
+            while let Some(n) = node.parent() {
+                node = n;
+                if n.kind() == "flow_node" {
+                    break;
+                }
+            }
+        }
+        Some(node)
+    }
+
+    fn find_block_mapping<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
+        let point = Point {
+            row: if self.position.line == 0 {
+                return None;
+            } else {
+                self.position.line as usize - 1
+            },
+            column: self.position.character as usize,
+        };
+        let found_node = {
+            let mut node = node.named_descendant_for_point_range(point, point)?;
+            if node.kind() == "block_mapping" {
+                node
+            } else {
+                while let Some(n) = node.parent() {
+                    node = n;
+                    if n.kind() == "block_mapping" {
+                        break;
+                    }
+                }
+                node
+            }
+        };
+
+        if found_node.kind() == "block_mapping" {
+            Some(found_node)
+        } else {
+            None
         }
     }
 
@@ -186,128 +358,107 @@ impl YamlCompletion {
         self.prototype_parents_completion(node)
     }
 
-    // TODO: Rewrite it into something more understandable...
+    // Is that even a little bit readable? I don't know how else to rewrite it better...
     fn prototype_parents_completion(&self, node: Node) -> CompletionResult {
-        match node.kind() {
+        #[rustfmt::skip]
+        let parent_field_name = match node.kind() {
+            "flow_sequence" => node.parent()?.prev_named_sibling()?.utf8_text(self.src.as_bytes()).ok()?,
+            "flow_node" => node.parent()?.parent()?.prev_named_sibling()?.utf8_text(self.src.as_bytes()).ok()?,
+            "block_mapping_pair" => node.child_by_field_name("key")?.utf8_text(self.src.as_bytes()).ok()?,
+            _ => return None,
+        };
+
+        if parent_field_name != "parent" {
+            return None;
+        }
+
+        let proto_name = match node.kind() {
+            "flow_sequence" => self.get_object_name(&node.parent()?.parent()?.parent()?)?,
+            "flow_node" => self.get_object_name(&node.parent()?.parent()?.parent()?.parent()?)?,
+            "block_mapping_pair" => self.get_object_name(&node.parent()?)?,
+            _ => return None,
+        };
+
+        #[rustfmt::skip]
+        let specified_parents = match node.kind() {
+            "flow_sequence" => self.get_specified_parents(&node).unwrap_or_default(),
+            "flow_node" => self.get_specified_parents(&node.parent()?).unwrap_or_default(),
+            "block_mapping_pair" => vec![],
+            _ => return None,
+        };
+
+        let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+        let filtered_prototypes = lock
+            .par_iter()
+            .filter(|p| p.prototype == proto_name)
+            .filter(|p| !specified_parents.contains(&p.id.as_str()));
+
+        let map = |id: String, prototype: String, end_position: u32| CompletionItem {
+            label: id.clone(),
+            kind: Some(CompletionItemKind::CLASS),
+            detail: Some(prototype),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range: {
+                    let position = Position::new(self.position.line, end_position);
+                    lsp_types::Range {
+                        start: position,
+                        end: position,
+                    }
+                },
+                new_text: id,
+            })),
+            ..Default::default()
+        };
+
+        let parents = match node.kind() {
             "flow_sequence" => {
-                let parent_node = node.parent()?.prev_named_sibling()?;
-                if parent_node.utf8_text(self.src.as_bytes()).ok() != Some("parent") {
-                    return None;
-                }
+                let child_count = node.child_count();
+                let last_child = node.child(child_count - 2)?;
+                let position = Position::new(
+                    self.position.line,
+                    match last_child.kind() {
+                        "," => last_child.end_position().column as u32 + 1,
+                        "flow_node" => return None,
+                        _ => node.start_position().column as u32 + 1,
+                    },
+                );
 
-                let proto = self.get_object_name(&parent_node.parent()?.parent()?)?;
-                let specified_parents = self.get_specified_parents(&node).unwrap_or_default();
-                let mut parents = tokio::task::block_in_place(|| self.prototypes.blocking_read())
-                    .par_iter()
-                    .filter(|p| p.prototype == proto)
-                    .filter(|p| !specified_parents.contains(&p.id.as_str()))
-                    .map(|p| {
-                        let mut is_comma = false;
-                        let mut is_flow_node = false;
-                        CompletionItem {
-                            label: p.id.clone(),
-                            kind: Some(CompletionItemKind::CLASS),
-                            detail: Some(p.prototype.clone()),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range: {
-                                    let child_count = node.child_count();
-                                    let last_child = if child_count > 1 {
-                                        node.child(child_count - 2)
-                                    } else {
-                                        None
-                                    };
-
-                                    let position = Position::new(
-                                        self.position.line,
-                                        if let Some(last_child) = last_child {
-                                            if last_child.kind() == "," {
-                                                is_comma = true;
-                                                last_child.end_position().column as u32 + 1
-                                            } else if last_child.kind() == "flow_node" {
-                                                is_flow_node = true;
-                                                last_child.end_position().column as u32
-                                            } else {
-                                                last_child.end_position().column as u32 + 1
-                                            }
-                                        } else {
-                                            node.start_position().column as u32 + 1
-                                        },
-                                    );
-                                    lsp_types::Range {
-                                        start: position,
-                                        end: position,
-                                    }
-                                },
-                                new_text: if is_comma {
-                                    p.id.clone()
-                                } else if is_flow_node {
-                                    format!(", {}", p.id)
-                                } else {
-                                    p.id.clone()
-                                },
-                            })),
-                            ..Default::default()
-                        }
+                let mut parents = filtered_prototypes
+                    .map(|p| CompletionItem {
+                        label: p.id.clone(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(p.prototype.clone()),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: {
+                                lsp_types::Range {
+                                    start: position,
+                                    end: position,
+                                }
+                            },
+                            new_text: p.id.clone(),
+                        })),
+                        ..Default::default()
                     })
                     .collect::<Vec<_>>();
 
                 parents.sort_by(|a, b| a.label.cmp(&b.label));
                 parents.truncate(100);
 
-                if !parents.is_empty() {
-                    Some(CompletionResponse::List(CompletionList {
-                        is_incomplete: true,
-                        items: parents,
-                    }))
-                } else {
-                    None
-                }
+                parents
             }
             "flow_node" => {
-                let parent_node = node.parent()?.parent()?.prev_named_sibling()?;
-                let parent_name = parent_node.utf8_text(self.src.as_bytes()).ok()?;
-                if parent_name != "parent" {
-                    return None;
-                }
-
-                let container_node = parent_node.parent()?.parent()?;
-                if container_node.kind() != "block_mapping" {
-                    return None;
-                }
-
-                let proto = self.get_object_name(&container_node)?;
                 let value = node.utf8_text(self.src.as_bytes()).ok()?;
-                let specified_parents = self
-                    .get_specified_parents(&node.parent()?)
-                    .unwrap_or_default();
-                let mut parents = tokio::task::block_in_place(|| self.prototypes.blocking_read())
-                    .par_iter()
-                    .filter(|p| p.prototype == proto)
-                    .filter(|p| !specified_parents.contains(&p.id.as_str()))
+                let mut parents = filtered_prototypes
                     .map(|p| (strsim::jaro_winkler(value, &p.id), p))
                     .filter(|(diff, _)| diff > &0.6)
                     .map(|(diff, p)| {
                         (
                             diff,
-                            CompletionItem {
-                                label: p.id.clone(),
-                                kind: Some(CompletionItemKind::CLASS),
-                                detail: Some(p.prototype.clone()),
-                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                    range: {
-                                        let position = Position::new(
-                                            self.position.line,
-                                            node.start_position().column as u32,
-                                        );
-                                        lsp_types::Range {
-                                            start: position,
-                                            end: position,
-                                        }
-                                    },
-                                    new_text: p.id.clone(),
-                                })),
-                                ..Default::default()
-                            },
+                            map(
+                                p.id.clone(),
+                                p.prototype.clone(),
+                                node.start_position().column as u32,
+                            ),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -316,110 +467,61 @@ impl YamlCompletion {
                 parents.reverse();
                 parents.truncate(100);
 
-                if !parents.is_empty() {
-                    Some(CompletionResponse::List(CompletionList {
-                        is_incomplete: true,
-                        items: parents.into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
-                    }))
-                } else {
-                    None
-                }
+                parents.into_iter().map(|(_, p)| p).collect()
             }
             "block_mapping_pair" => match node.child_by_field_name("value") {
                 Some(value_node) => {
                     let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
                     let key_node = node.child_by_field_name("key")?;
-                    let proto = self.get_object_name(&node.parent().unwrap())?;
-                    let mut parents =
-                        tokio::task::block_in_place(|| self.prototypes.blocking_read())
-                            .par_iter()
-                            .filter(|p| p.prototype == proto)
-                            .map(|p| (strsim::jaro_winkler(value, &p.id), p))
-                            .filter(|(diff, _)| diff > &0.6)
-                            .map(|(diff, p)| {
-                                (
-                                    diff,
-                                    CompletionItem {
-                                        label: p.id.clone(),
-                                        kind: Some(CompletionItemKind::CLASS),
-                                        detail: Some(p.prototype.clone()),
-                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                            range: {
-                                                let position = Position::new(
-                                                    self.position.line,
-                                                    key_node.end_position().column as u32 + 2,
-                                                );
-                                                lsp_types::Range {
-                                                    start: position,
-                                                    end: position,
-                                                }
-                                            },
-                                            new_text: p.id.clone(),
-                                        })),
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                            .collect::<Vec<_>>();
+                    let mut parents = filtered_prototypes
+                        .map(|p| (strsim::jaro_winkler(value, &p.id), p))
+                        .filter(|(diff, _)| diff > &0.6)
+                        .map(|(diff, p)| {
+                            (
+                                diff,
+                                map(
+                                    p.id.clone(),
+                                    p.prototype.clone(),
+                                    key_node.end_position().column as u32 + 2,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>();
 
                     parents.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
                     parents.reverse();
                     parents.truncate(100);
 
-                    if !parents.is_empty() {
-                        Some(CompletionResponse::List(CompletionList {
-                            is_incomplete: true,
-                            items: parents.into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
-                        }))
-                    } else {
-                        None
-                    }
+                    parents.into_iter().map(|(_, p)| p).collect()
                 }
                 None => {
                     let key_node = node.child_by_field_name("key")?;
-                    let proto = self.get_object_name(&node.parent().unwrap())?;
-                    let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
-                    let mut parents = lock
-                        .par_iter()
-                        .filter(|p| p.prototype == proto)
-                        .map(|p| CompletionItem {
-                            label: p.id.clone(),
-                            kind: Some(CompletionItemKind::CLASS),
-                            detail: Some(p.prototype.clone()),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range: {
-                                    let position = Position::new(
-                                        self.position.line,
-                                        key_node.end_position().column as u32 + 2,
-                                    );
-                                    lsp_types::Range {
-                                        start: position,
-                                        end: Position {
-                                            character: position.character + p.id.len() as u32,
-                                            ..position
-                                        },
-                                    }
-                                },
-                                new_text: p.id.clone(),
-                            })),
-                            ..Default::default()
+                    let mut parents = filtered_prototypes
+                        .map(|p| {
+                            map(
+                                p.id.clone(),
+                                p.prototype.clone(),
+                                key_node.end_position().column as u32 + 2,
+                            )
                         })
                         .collect::<Vec<_>>();
 
                     parents.sort_by(|a, b| a.label.cmp(&b.label));
                     parents.truncate(100);
 
-                    if !parents.is_empty() {
-                        Some(CompletionResponse::List(CompletionList {
-                            is_incomplete: true,
-                            items: parents,
-                        }))
-                    } else {
-                        None
-                    }
+                    parents
                 }
             },
-            _ => None,
+            _ => vec![],
+        };
+
+        if !parents.is_empty() {
+            Some(CompletionResponse::List(CompletionList {
+                is_incomplete: true,
+                items: parents,
+            }))
+        } else {
+            None
         }
     }
 
@@ -635,172 +737,5 @@ impl YamlCompletion {
             .collect::<Vec<_>>();
 
         Some(CompletionResponse::Array(completions))
-    }
-}
-
-impl Completion for YamlCompletion {
-    fn completion(&self) -> CompletionResult {
-        let (start_col, end_col) = {
-            // Calculate the position for the correct node search.
-            // P.S. Why on tree-sitter playground everything works correctly (in javascript)
-            // even without dancing with tambourine - idk.
-            let line = self
-                .src
-                .lines()
-                .nth(self.position.line as usize)
-                .unwrap_or_default();
-
-            // If the string is empty, we use the cursor coordinates
-            // and minus them by one, otherwise the root node `stream` will be searched.
-            let trim_str = line.trim();
-            if trim_str.len() == 0 {
-                let col = if self.position.character == 0 {
-                    self.position.character
-                } else {
-                    self.position.character - 1
-                } as usize;
-
-                (col, col)
-
-            // If the string starts with `-`, we try to find the coordinate starting before
-            // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
-            } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
-                let mut col = 0;
-                let mut chars = line.chars();
-                while let Some(ch) = chars.next() {
-                    if ch == '-' {
-                        break;
-                    }
-                    col += 1;
-                }
-                (col, col)
-
-            // If the string is not empty, we catch the beginning of the text
-            // and the end of the text to properly search for child nodes.
-            } else {
-                let mut scol = line.chars().count();
-                let mut ecol = scol;
-                let mut chars = {
-                    let mut c = line.chars();
-                    while let Some(_) = c.next_back() {
-                        scol -= 1;
-
-                        if scol == self.position.character as usize {
-                            break;
-                        } else if scol < self.position.character as usize {
-                            c.next();
-                            scol += 1;
-                            break;
-                        }
-                    }
-                    c
-                };
-                let mut text = false;
-                while let Some(ch) = chars.next_back() {
-                    scol -= 1;
-
-                    if !ch.is_whitespace() {
-                        text = true;
-                    } else if text && ch.is_whitespace() {
-                        break;
-                    }
-
-                    if !text {
-                        ecol -= 1;
-                    }
-                }
-
-                (scol + 1, ecol - 1)
-            }
-        };
-        let start_point = Point::new(self.position.line as usize, start_col);
-        let end_point = Point::new(self.position.line as usize, end_col);
-
-        let root_node = self.tree.root_node();
-        let found_node = root_node.named_descendant_for_point_range(start_point, end_point);
-
-        if found_node.is_none() {
-            return None;
-        }
-
-        // If a text node was found, we climb to the parent node,
-        // or an error node, we terminate altogether.
-        let found_node = {
-            let mut node = found_node.unwrap();
-            tracing::trace!("Found node: {node:#?}");
-            if node.kind() == "string_scalar" {
-                for _ in 0..3 {
-                    node = node.parent().unwrap();
-                }
-            }
-            if node.kind() == "ERROR" {
-                return None;
-            }
-            node
-        };
-
-        tracing::trace!("Work with node {found_node:?}");
-
-        match found_node.kind() {
-            "block_mapping_pair" => self.block_mapping_pair(found_node),
-            "block_mapping" => self.block_mapping(found_node),
-            "block_sequence_item" => self.block_sequence_item(found_node),
-            "block_sequence" => {
-                let point = Point {
-                    row: if self.position.line == 0 {
-                        return None;
-                    } else {
-                        self.position.line as usize - 1
-                    },
-                    column: self.position.character as usize,
-                };
-                let found_node = {
-                    let mut node = found_node.named_descendant_for_point_range(point, point)?;
-                    if node.kind() == "block_mapping" {
-                        node
-                    } else {
-                        while let Some(n) = node.parent() {
-                            node = n;
-                            if n.kind() == "block_mapping" {
-                                break;
-                            }
-                        }
-                        node
-                    }
-                };
-
-                if found_node.kind() == "block_mapping" {
-                    self.block_mapping(found_node)
-                } else {
-                    None
-                }
-            }
-            "flow_sequence" => {
-                let point = Point {
-                    row: self.position.line as usize,
-                    column: self.position.character as usize - 1,
-                };
-                let found_node = {
-                    let mut node = found_node.named_descendant_for_point_range(point, point)?;
-                    if node.kind() != "flow_sequence" {
-                        while let Some(n) = node.parent() {
-                            node = n;
-
-                            if n.kind() == "flow_node" {
-                                break;
-                            }
-                        }
-                    }
-                    node
-                };
-
-                match found_node.kind() {
-                    "flow_node" => self.flow_node(found_node),
-                    "flow_sequence" => self.flow_sequence(found_node),
-                    _ => None,
-                }
-            }
-            _ => return None,
-        }
     }
 }

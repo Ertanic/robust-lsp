@@ -100,16 +100,12 @@ impl Completion for YamlCompletion {
         let end_point = Point::new(self.position.line as usize, end_col);
 
         let root_node = self.tree.root_node();
-        let found_node = root_node.named_descendant_for_point_range(start_point, end_point);
-
-        if found_node.is_none() {
-            return None;
-        }
+        let found_node = root_node.named_descendant_for_point_range(start_point, end_point)?;
 
         // If a text node was found, we climb to the parent node,
         // or an error node, we terminate altogether.
         let found_node = {
-            let mut node = found_node.unwrap();
+            let mut node = found_node;
             tracing::trace!("Found node: {node:#?}");
             if node.kind() == "string_scalar" {
                 for _ in 0..3 {
@@ -168,6 +164,8 @@ impl YamlCompletion {
     }
 
     fn find_flow_item<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
+        debug_assert_eq!(node.kind(), "flow_sequence");
+
         let point = Point {
             row: self.position.line as usize,
             column: self.position.character as usize - 1,
@@ -185,6 +183,8 @@ impl YamlCompletion {
     }
 
     fn find_block_mapping<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
+        debug_assert_eq!(node.kind(), "block_sequence");
+
         let point = Point {
             row: if self.position.line == 0 {
                 return None;
@@ -230,6 +230,8 @@ impl YamlCompletion {
     }
 
     fn get_object_name(&self, node: &Node) -> Option<&str> {
+        debug_assert_eq!(node.kind(), "block_mapping");
+
         let mut name = None;
         let children_count = node.named_child_count();
 
@@ -258,6 +260,8 @@ impl YamlCompletion {
     }
 
     fn get_specified_fields<'a>(&'a self, block_mapping_node: &Node) -> Vec<&'a str> {
+        debug_assert_eq!(block_mapping_node.kind(), "block_mapping");
+
         let children_count = block_mapping_node.named_child_count();
         let mut fields = Vec::with_capacity(children_count);
         for i in 0..children_count {
@@ -273,8 +277,9 @@ impl YamlCompletion {
     }
 
     fn get_specified_parents(&self, node: &Node) -> Option<Vec<&str>> {
-        let mut parents = Vec::new();
+        debug_assert!(node.kind() == "block_mapping_pair" || node.kind() == "flow_sequence");
 
+        let mut parents = Vec::new();
         match node.kind() {
             "block_mapping_pair" => {
                 let value_node = node.child_by_field_name("value")?;
@@ -295,9 +300,9 @@ impl YamlCompletion {
     }
 
     fn block_sequence_item(&self, node: Node) -> CompletionResult {
-        let nest = self.get_nesting(&node);
+        debug_assert_eq!(node.kind(), "block_sequence_item");
 
-        if nest > 2 {
+        if self.get_nesting(&node) > 2 {
             None
         } else {
             Some(CompletionResponse::Array(vec![CompletionItem {
@@ -323,6 +328,8 @@ impl YamlCompletion {
     }
 
     fn block_mapping_pair(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
         let nest = self.get_nesting(&node);
         let key_node = node.child_by_field_name("key")?;
         let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
@@ -341,9 +348,9 @@ impl YamlCompletion {
     }
 
     fn block_mapping(&self, node: Node) -> CompletionResult {
-        let nest = self.get_nesting(&node);
+        debug_assert_eq!(node.kind(), "block_mapping");
 
-        if nest > 2 {
+        if self.get_nesting(&node) > 2 {
             self.component_fields_completion(node)
         } else {
             self.prototype_fields_completion(node)
@@ -351,23 +358,27 @@ impl YamlCompletion {
     }
 
     fn flow_node(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "flow_node");
         self.prototype_parents_completion(node)
     }
 
     fn flow_sequence(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "flow_sequence");
         self.prototype_parents_completion(node)
     }
 
     fn field_type_completion(&self, node: Node) -> CompletionResult {
-        let nest = self.get_nesting(&node);
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        match nest {
+        match self.get_nesting(&node) {
             2 => self.prototype_field_type_completion(node),
             _ => None,
         }
     }
 
     fn prototype_field_type_completion(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+        
         let key_node = node.child_by_field_name("key")?;
         let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
@@ -495,6 +506,12 @@ impl YamlCompletion {
 
     // Is that even a little bit readable? I don't know how else to rewrite it better...
     fn prototype_parents_completion(&self, node: Node) -> CompletionResult {
+        debug_assert!(
+            node.kind() == "flow_sequence"
+                || node.kind() == "flow_node"
+                || node.kind() == "block_mapping_pair"
+        );
+
         #[rustfmt::skip]
         let parent_field_name = match node.kind() {
             "flow_sequence" => node.parent()?.prev_named_sibling()?.utf8_text(self.src.as_bytes()).ok()?,
@@ -661,6 +678,8 @@ impl YamlCompletion {
     }
 
     fn component_fields_completion(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping");
+
         let comp_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.classes.clone());
@@ -701,6 +720,8 @@ impl YamlCompletion {
     }
 
     fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping");
+
         let proto_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.classes.clone());
@@ -752,6 +773,8 @@ impl YamlCompletion {
     }
 
     fn prototype_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
         let value_node = node
             .child_by_field_name("value")
             .map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
@@ -807,6 +830,8 @@ impl YamlCompletion {
     }
 
     fn components_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+        debug_assert_eq!(node.kind(), "block_mapping_pair");
+
         let is_components_node = {
             let mut node = node;
             for _ in 0..6 {

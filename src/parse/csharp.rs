@@ -165,29 +165,18 @@ impl ParseFromNode for CsharpClassField {
                         modifiers.insert(modifier);
                     }
                     "variable_declaration" => {
-                        let mut cursor = node.walk();
-                        for var_node in node.named_children(&mut cursor) {
-                            match var_node.kind() {
-                                "predefined_type" | "identifier" | "generic_name"
-                                | "nullable_type" => {
-                                    type_name = Some(
-                                        var_node.utf8_text(source.as_bytes()).unwrap().to_owned(),
+                        let type_node = node.child_by_field_name("type");
+                        if let Some(type_node) = type_node {
+                            type_name =
+                                Some(type_node.utf8_text(source.as_bytes()).unwrap().to_owned());
+                            let declarator_node = type_node.next_named_sibling();
+                            if let Some(declarator_node) = declarator_node {
+                                let name_node = declarator_node.child_by_field_name("name");
+                                if let Some(name_node) = name_node {
+                                    field_name = Some(
+                                        name_node.utf8_text(source.as_bytes()).unwrap().to_owned(),
                                     );
                                 }
-                                "variable_declarator" => {
-                                    let mut cursor = var_node.walk();
-                                    if cursor.goto_first_child() {
-                                        let node = cursor.node();
-                                        if node.kind() == "identifier" {
-                                            field_name = Some(
-                                                node.utf8_text(source.as_bytes())
-                                                    .unwrap()
-                                                    .to_owned(),
-                                            );
-                                        }
-                                    }
-                                }
-                                _ => {}
                             }
                         }
                     }

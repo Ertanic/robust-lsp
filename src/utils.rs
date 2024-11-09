@@ -1,7 +1,7 @@
 use std::{future::Future, sync::Arc};
 use tower_lsp::{
     lsp_types::{
-        self, notification::Progress, request::WorkDoneProgressCreate, NumberOrString,
+        self, notification::Progress, request::WorkDoneProgressCreate, NumberOrString, Position,
         ProgressParams, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin,
         WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
     },
@@ -136,4 +136,74 @@ where
     tokio::task::block_in_place(move || {
         tokio::runtime::Handle::current().block_on(async move { func().await })
     })
+}
+
+// Calculate the position for the correct node search.
+// P.S. Why on tree-sitter playground everything works correctly (in javascript)
+// even without dancing with tambourine - idk.
+pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
+    let line = src.lines().nth(position.line as usize).unwrap_or_default();
+
+    // If the string is empty, we use the cursor coordinates
+    // and minus them by one, otherwise the root node `stream` will be searched.
+    let trim_str = line.trim();
+    if trim_str.len() == 0 {
+        let col = if position.character == 0 {
+            position.character
+        } else {
+            position.character - 1
+        } as usize;
+
+        (col, col)
+
+    // If the string starts with `-`, we try to find the coordinate starting before
+    // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
+    } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
+        let mut col = 0;
+        let mut chars = line.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '-' {
+                break;
+            }
+            col += 1;
+        }
+        (col, col)
+
+    // If the string is not empty, we catch the beginning of the text
+    // and the end of the text to properly search for child nodes.
+    } else {
+        let mut scol = line.chars().count();
+        let mut ecol = scol;
+        let mut chars = {
+            let mut c = line.chars();
+            while let Some(_) = c.next_back() {
+                scol -= 1;
+
+                if scol == position.character as usize {
+                    break;
+                } else if scol < position.character as usize {
+                    c.next();
+                    scol += 1;
+                    break;
+                }
+            }
+            c
+        };
+        let mut text = false;
+        while let Some(ch) = chars.next_back() {
+            scol -= 1;
+
+            if !ch.is_whitespace() {
+                text = true;
+            } else if text && ch.is_whitespace() {
+                break;
+            }
+
+            if !text {
+                ecol -= 1;
+            }
+        }
+
+        (scol + 1, ecol - 1)
+    }
 }

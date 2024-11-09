@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
 
-mod common;
+pub mod common;
 pub mod csharp;
 pub mod structs;
 pub mod yaml;

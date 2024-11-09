@@ -7,7 +7,7 @@ use crate::{
         csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
         json::RsiMeta,
     },
-    utils::block,
+    utils::{block, get_columns},
 };
 use rayon::prelude::*;
 use ropey::Rope;
@@ -30,79 +30,7 @@ pub struct YamlCompletion {
 
 impl Completion for YamlCompletion {
     fn completion(&self) -> CompletionResult {
-        let (start_col, end_col) = {
-            // Calculate the position for the correct node search.
-            // P.S. Why on tree-sitter playground everything works correctly (in javascript)
-            // even without dancing with tambourine - idk.
-            let line = self
-                .src
-                .lines()
-                .nth(self.position.line as usize)
-                .unwrap_or_default();
-
-            // If the string is empty, we use the cursor coordinates
-            // and minus them by one, otherwise the root node `stream` will be searched.
-            let trim_str = line.trim();
-            if trim_str.len() == 0 {
-                let col = if self.position.character == 0 {
-                    self.position.character
-                } else {
-                    self.position.character - 1
-                } as usize;
-
-                (col, col)
-
-            // If the string starts with `-`, we try to find the coordinate starting before
-            // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
-            } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
-                let mut col = 0;
-                let mut chars = line.chars();
-                while let Some(ch) = chars.next() {
-                    if ch == '-' {
-                        break;
-                    }
-                    col += 1;
-                }
-                (col, col)
-
-            // If the string is not empty, we catch the beginning of the text
-            // and the end of the text to properly search for child nodes.
-            } else {
-                let mut scol = line.chars().count();
-                let mut ecol = scol;
-                let mut chars = {
-                    let mut c = line.chars();
-                    while let Some(_) = c.next_back() {
-                        scol -= 1;
-
-                        if scol == self.position.character as usize {
-                            break;
-                        } else if scol < self.position.character as usize {
-                            c.next();
-                            scol += 1;
-                            break;
-                        }
-                    }
-                    c
-                };
-                let mut text = false;
-                while let Some(ch) = chars.next_back() {
-                    scol -= 1;
-
-                    if !ch.is_whitespace() {
-                        text = true;
-                    } else if text && ch.is_whitespace() {
-                        break;
-                    }
-
-                    if !text {
-                        ecol -= 1;
-                    }
-                }
-
-                (scol + 1, ecol - 1)
-            }
-        };
+        let (start_col, end_col) = get_columns(self.position, &self.src);
         let start_point = Point::new(self.position.line as usize, start_col);
         let end_point = Point::new(self.position.line as usize, end_col);
 

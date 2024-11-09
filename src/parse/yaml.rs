@@ -1,4 +1,4 @@
-use super::{structs::yaml::YamlPrototype, ParsedFiles};
+use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles};
 use crate::parse::common::ParseResult;
 use ropey::Rope;
 use std::path::PathBuf;
@@ -52,6 +52,7 @@ fn get_yaml_prototype(
     if let Some(block_mapping_node) = get_block_mapping(block_sequence_item_node) {
         let mut prototype = None;
         let mut id = None;
+        let mut id_range = None;
         let mut parents = vec![];
 
         for i in 0..block_mapping_node.named_child_count() {
@@ -72,7 +73,10 @@ fn get_yaml_prototype(
                 "type" => {
                     prototype = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned())
                 }
-                "id" => id = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned()),
+                "id" => {
+                    id = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned());
+                    id_range = Some(value_node.range());
+                }
                 "parent" => match value_node.kind() {
                     "block_node" | "flow_node" => {
                         let sequence_node = match value_node.named_child(0) {
@@ -111,12 +115,12 @@ fn get_yaml_prototype(
 
         match (prototype, id) {
             (Some(prototype), Some(id)) => {
-                return Some(YamlPrototype {
+                return Some(YamlPrototype::new(
                     prototype,
                     id,
                     parents,
-                    file: path.clone(),
-                })
+                    DefinitionIndex(path.clone(), id_range),
+                ))
             }
             _ => return None,
         }

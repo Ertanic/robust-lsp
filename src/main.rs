@@ -8,6 +8,7 @@ mod backend;
 mod parse;
 mod utils;
 mod completion;
+mod goto;
 
 #[tokio::main]
 async fn main() {

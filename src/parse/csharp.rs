@@ -98,6 +98,7 @@ impl ParseFromNode for CsharpClass {
         let mut attributes = CsharpAttributeCollection::new();
         let mut fields = vec![];
         let mut name = None;
+        let mut name_range = None;
 
         for node in node.named_children(&mut cursor) {
             let source = src.clone().to_string();
@@ -109,6 +110,7 @@ impl ParseFromNode for CsharpClass {
                 "identifier" => {
                     let indent = node.utf8_text(source.as_bytes()).unwrap().to_owned();
                     name = Some(indent);
+                    name_range = Some(node.range());
                 }
                 "base_list" => {
                     let mut cursor = node.walk();
@@ -138,8 +140,8 @@ impl ParseFromNode for CsharpClass {
             }
         }
 
-        match name {
-            Some(name) => Ok(CsharpClass::new(name, base, attributes, fields, modifiers)),
+        match (name, name_range) {
+            (Some(name), Some(name_range)) => Ok(CsharpClass::new(name, base, attributes, fields, modifiers, name_range)),
             _ => Err(()),
         }
     }

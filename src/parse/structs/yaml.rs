@@ -1,11 +1,25 @@
-use std::{hash::Hash, path::PathBuf};
+use crate::parse::common::{DefinitionIndex, Index};
+use std::hash::Hash;
 
 #[derive(Debug, Clone, Default)]
 pub struct YamlPrototype {
     pub prototype: String,
     pub id: String,
     pub parents: Vec<String>,
-    pub file: PathBuf,
+
+    index: DefinitionIndex,
+}
+
+impl YamlPrototype {
+    pub fn new(prototype: String, id: String, parents: Vec<String>, index: DefinitionIndex) -> Self {
+        Self { prototype, id, parents, index }
+    }
+}
+
+impl Index for YamlPrototype {
+    fn index(&self) -> &DefinitionIndex {
+        &self.index
+    }
 }
 
 impl PartialEq for YamlPrototype {

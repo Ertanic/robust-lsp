@@ -1,9 +1,8 @@
 use crate::{
     completion::{yml::YamlCompletion, Completion},
+    goto::{yml::YamlGotoDefinition, GotoDefinition},
     parse::{
-        csharp, parse_project,
-        structs::{csharp::CsharpClass, yaml::YamlPrototype},
-        yaml,
+        common::Index, csharp, parse_project, structs::{csharp::CsharpClass, yaml::YamlPrototype}, yaml
     },
     utils::check_project_compliance,
 };
@@ -19,9 +18,9 @@ use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
         CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams, InitializeResult,
-        InitializedParams, MessageType, ServerCapabilities, TextDocumentSyncCapability,
-        TextDocumentSyncKind, Url,
+        DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
+        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, MessageType,
+        OneOf::Left, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     },
     Client, LanguageServer,
 };
@@ -75,6 +74,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
                 completion_provider: Some(Default::default()),
+                definition_provider: Some(Left(true)),
                 ..Default::default()
             },
         })
@@ -174,7 +174,7 @@ impl LanguageServer for Backend {
                         let mut lock = self.classes.write().await;
                         let diff = lock
                             .par_iter()
-                            .filter(|c| c.file == path)
+                            .filter(|c| c.index().0 == path)
                             .filter(|c| !classes.contains(c))
                             .cloned()
                             .collect::<Vec<_>>();
@@ -201,7 +201,7 @@ impl LanguageServer for Backend {
                         let mut lock = self.prototypes.write().await;
                         let diff = lock
                             .par_iter()
-                            .filter(|p| p.file == path)
+                            .filter(|p| p.index().0 == path)
                             .filter(|p| !prototypes.contains(p))
                             .cloned()
                             .collect::<Vec<_>>();
@@ -258,6 +258,36 @@ impl LanguageServer for Backend {
                 tracing::trace!("File extension is not supported.");
                 Ok(None)
             }
+        }
+    }
+
+    #[rustfmt::skip]
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        tracing::trace!("Goto definition request has been received.");
+
+        let file = params.text_document_position_params.text_document.uri.to_file_path().unwrap_or_default();
+        let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
+
+        match extension {
+            "yml" | "yaml" => {
+                let opened = self.opened_files.read().await;
+                let rope = opened.get(&params.text_document_position_params.text_document.uri);
+
+                match rope {
+                    Some(rope) => {
+                        let definition = YamlGotoDefinition::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position_params.position, rope);
+                        Ok(definition.goto_definition())
+                    }
+                    None => {
+                        tracing::trace!("File wasn't cached.");
+                        Ok(None)
+                    }
+                }
+            }
+            _ => Ok(None)
         }
     }
 

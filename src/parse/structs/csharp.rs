@@ -1,4 +1,7 @@
 #![allow(unused)]
+use common::DefinitionIndex;
+use tree_sitter::Range;
+
 use super::*;
 
 pub struct ReflectionManager {
@@ -232,7 +235,6 @@ pub struct CsharpClass {
     pub fields: Vec<CsharpClassField>,
     pub modifiers: HashSet<String>,
 
-    pub file: PathBuf,
     index: DefinitionIndex,
 }
 
@@ -243,6 +245,7 @@ impl CsharpClass {
         attributes: CsharpAttributeCollection,
         fields: Vec<CsharpClassField>,
         modifiers: HashSet<String>,
+        range: Range,
     ) -> Self {
         Self {
             name,
@@ -250,12 +253,12 @@ impl CsharpClass {
             attributes,
             fields,
             modifiers,
-            ..Default::default()
+            index: DefinitionIndex(Default::default(), Some(range)),
         }
     }
 
     pub fn set_file(&mut self, file: PathBuf) {
-        self.file = file;
+        self.index.0 = file;
     }
 }
 
@@ -283,7 +286,7 @@ impl Hash for CsharpClass {
 }
 
 impl Index for CsharpClass {
-    fn index(&self) -> &common::DefinitionIndex {
+    fn index(&self) -> &DefinitionIndex {
         &self.index
     }
 }

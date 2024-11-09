@@ -3,6 +3,8 @@
   "displayName": "Robust LSP",
   "description": "Language Server Protocol for Robust Toolbox",
   "version": "0.0.1",
+  "license": "GPL-3.0-only",
+  "icon": "resources/icon.png",
   "repository": {
     "url": "https://github.com/Ertanic/robust-lsp"
   },

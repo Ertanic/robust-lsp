@@ -1,17 +1,27 @@
-use std::io;
-
 use backend::Backend;
+use clap::{arg, command, crate_version};
+use std::io;
 use tower_lsp::{LspService, Server};
 use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod backend;
-mod parse;
-mod utils;
 mod completion;
 mod goto;
+mod parse;
+mod utils;
 
 #[tokio::main]
 async fn main() {
+    let matches = command!()
+        .disable_version_flag(true)
+        .arg(arg!(-v --version "Print version information"))
+        .get_matches();
+
+    if matches.get_one::<bool>("version") == Some(&true) {
+        print!(crate_version!());
+        return;
+    }
+
     let fmt_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_ansi(false)

@@ -1,0 +1,36 @@
+name: Release
+on: [workflow_dispatch]
+permissions: 
+  contents: write
+jobs:
+    release:
+        strategy:
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+                include:
+                  - os: ubuntu-latest
+                    file: robust-lsp
+                  - os: windows-latest
+                    file: robust-lsp.exe
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+            - uses: Swatinem/rust-cache@v1
+              with:
+                cache-on-failure: true
+            - name: Build
+              run: cargo build --release
+            - name: Get current app version
+              id: version
+              uses: dante-signal31/rust-app-version@v1.2.0
+            - name: Upload artifact
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: v${{ steps.version.outputs.app_version }}
+                  files: |
+                      target/release/${{ matrix.file }}
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

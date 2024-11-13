@@ -130,9 +130,21 @@ fn get_yaml_prototype(
 }
 
 fn get_block_sequence_node<'a>(root_node: &'a Node<'a>) -> Option<Node<'a>> {
-    let document = root_node.named_child(0)?;
-    let block_node = document.named_child(0)?;
-    block_node.named_child(0)
+    let document = find_child_node(*root_node, "document")?;
+    let block_node = find_child_node(document, "block_node")?;
+    find_child_node(block_node, "block_sequence")
+}
+
+fn find_child_node<'a>(node: Node<'a>, name: &'a str) -> Option<Node<'a>> {
+    let mut n = None;
+    for i in 0..node.named_child_count() {
+        let document_node = node.named_child(i).unwrap();
+        if document_node.kind() == name {
+            n = Some(document_node);
+            break;
+        }
+    }
+    n
 }
 
 fn get_block_mapping<'a>(block_sequence_item_node: Node<'a>) -> Option<Node<'a>> {

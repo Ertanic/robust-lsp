@@ -438,6 +438,7 @@ impl YamlCompletion {
 
         let current_folder = env::current_dir().ok()?;
         let sprites_folder = current_folder.join(SPRITES_RES_PATH);
+        tracing::trace!("sprite folder: {sprites_folder:?}");
         if !sprites_folder.exists() {
             return None;
         }
@@ -1069,51 +1070,65 @@ impl YamlCompletion {
             return None;
         }
 
-        let value = node
-            .child_by_field_name("value")
-            .map(|node| node.utf8_text(self.src.as_bytes()).unwrap());
+        let value = node.child_by_field_name("value");
 
         let lock = tokio::task::block_in_place(|| self.classes.blocking_read());
-        let completions = lock
-            .par_iter()
-            .filter_map(|c| Component::try_from(c).ok())
-            .filter(|c| {
-                if let Some(value) = value {
-                    let name = c.get_component_name().to_lowercase();
-                    let diff = strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
+        let completions = lock.par_iter().filter_map(|c| Component::try_from(c).ok());
 
-                    diff < name.len()
-                } else {
-                    true
-                }
-            })
-            .map(|c| {
-                let name = c.get_component_name();
+        let map = |c: &Component| {
+            let name = c.get_component_name();
 
-                CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::CLASS),
-                    label_details: Some(CompletionItemLabelDetails {
-                        detail: Some("Component".to_owned()),
-                        ..Default::default()
-                    }),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: {
-                            let position = Position::new(
-                                self.position.line,
-                                key_node.end_position().column as u32 + 2,
-                            );
-                            lsp_types::Range {
-                                start: position,
-                                end: position,
-                            }
-                        },
-                        new_text: name,
-                    })),
+            CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::CLASS),
+                label_details: Some(CompletionItemLabelDetails {
+                    detail: Some("Component".to_owned()),
                     ..Default::default()
-                }
-            })
-            .collect::<Vec<_>>();
+                }),
+                ..Default::default()
+            }
+        };
+
+        let completions = match value {
+            Some(value_node) => {
+                let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                completions
+                    .filter(|c| {
+                        let name = c.get_component_name().to_lowercase();
+                        let diff =
+                            strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
+                        diff < name.len()
+                    })
+                    .map(|c| {
+                        let item = map(&c);
+                        let name = c.get_component_name();
+                        CompletionItem {
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: {
+                                    let start = Position::new(
+                                        self.position.line,
+                                        key_node.end_position().column as u32 + 2,
+                                    );
+                                    let end = Position::new(
+                                        self.position.line,
+                                        value_node.end_position().column as u32,
+                                    );
+                                    lsp_types::Range { start, end }
+                                },
+                                new_text: name,
+                            })),
+                            ..item
+                        }
+                    })
+                    .collect()
+            }
+            None => completions
+                .map(|c| CompletionItem {
+                    insert_text: Some(c.get_component_name().to_owned()),
+                    ..map(&c)
+                })
+                .collect(),
+        };
 
         Some(CompletionResponse::Array(completions))
     }

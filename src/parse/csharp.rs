@@ -1,5 +1,5 @@
 use super::{
-    common::{ParseFromNode, ParseResult},
+    common::{DefinitionIndex, ParseFromNode, ParseResult},
     structs::csharp::{
         CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
         CsharpAttributeCollection, CsharpClass, CsharpClassField,
@@ -9,7 +9,7 @@ use crate::backend::ParsedFiles;
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tree_sitter::Node;
@@ -61,13 +61,7 @@ pub(crate) async fn parse(
                     let src = src.clone();
                     handles.push(s.spawn({
                         let path = path.clone();
-                        move || {
-                            let mut class = CsharpClass::get(node, src);
-                            if let Ok(ref mut class) = class {
-                                class.set_file(path);
-                            }
-                            class
-                        }
+                        move || CsharpClass::get(node, src, &path)
                     }));
                 }
 
@@ -90,7 +84,7 @@ pub(crate) async fn parse(
 }
 
 impl ParseFromNode for CsharpClass {
-    fn get(node: Node, src: Arc<Rope>) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, path: &Path) -> ParseResult<Self> {
         let mut cursor = node.walk();
 
         let mut modifiers = HashSet::new();
@@ -120,7 +114,8 @@ impl ParseFromNode for CsharpClass {
                     }
                 }
                 "attribute_list" => {
-                    attributes.extend(Vec::<CsharpAttribute>::get(node, src.clone())?.into_iter());
+                    attributes
+                        .extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter());
                 }
                 "declaration_list" => {
                     // class body
@@ -128,7 +123,7 @@ impl ParseFromNode for CsharpClass {
                     for node in node.named_children(&mut cursor) {
                         match node.kind() {
                             "field_declaration" | "property_declaration" => {
-                                if let Ok(field) = CsharpClassField::get(node, src.clone()) {
+                                if let Ok(field) = CsharpClassField::get(node, src.clone(), path) {
                                     fields.push(field);
                                 }
                             }
@@ -140,15 +135,22 @@ impl ParseFromNode for CsharpClass {
             }
         }
 
-        match (name, name_range) {
-            (Some(name), Some(name_range)) => Ok(CsharpClass::new(name, base, attributes, fields, modifiers, name_range)),
+        match name {
+            Some(name) => Ok(CsharpClass::new(
+                name,
+                base,
+                attributes,
+                fields,
+                modifiers,
+                DefinitionIndex(path.to_path_buf(), name_range),
+            )),
             _ => Err(()),
         }
     }
 }
 
 impl ParseFromNode for CsharpClassField {
-    fn get(node: Node, src: Arc<Rope>) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, path: &Path) -> ParseResult<Self> {
         let mut cursor = node.walk();
         let source = src.clone().to_string();
 
@@ -156,12 +158,13 @@ impl ParseFromNode for CsharpClassField {
         let mut attributes = CsharpAttributeCollection::new();
         let mut type_name = None;
         let mut field_name = None;
+        let mut name_range = None;
 
         if node.kind() == "field_declaration" {
             for node in node.named_children(&mut cursor) {
                 match node.kind() {
                     "attribute_list" => attributes
-                        .extend(Vec::<CsharpAttribute>::get(node, src.clone())?.into_iter()),
+                        .extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter()),
                     "modifier" => {
                         let modifier = node.utf8_text(source.as_bytes()).unwrap().to_owned();
                         modifiers.insert(modifier);
@@ -178,6 +181,7 @@ impl ParseFromNode for CsharpClassField {
                                     field_name = Some(
                                         name_node.utf8_text(source.as_bytes()).unwrap().to_owned(),
                                     );
+                                    name_range = Some(name_node.range());
                                 }
                             }
                         }
@@ -192,6 +196,7 @@ impl ParseFromNode for CsharpClassField {
             ) {
                 (Some(type_node), Some(name_node)) => {
                     field_name = Some(name_node.utf8_text(source.as_bytes()).unwrap().to_owned());
+                    name_range = Some(name_node.range());
                     type_name = Some(type_node.utf8_text(source.as_bytes()).unwrap().to_owned());
                 }
                 _ => return Err(()),
@@ -199,8 +204,9 @@ impl ParseFromNode for CsharpClassField {
 
             for prop_node in node.named_children(&mut cursor) {
                 match prop_node.kind() {
-                    "attribute_list" => attributes
-                        .extend(Vec::<CsharpAttribute>::get(prop_node, src.clone())?.into_iter()),
+                    "attribute_list" => attributes.extend(
+                        Vec::<CsharpAttribute>::get(prop_node, src.clone(), path)?.into_iter(),
+                    ),
                     "modifier" => {
                         let modifier = prop_node.utf8_text(source.as_bytes()).unwrap().to_owned();
                         modifiers.insert(modifier);
@@ -211,19 +217,20 @@ impl ParseFromNode for CsharpClassField {
         }
 
         match (field_name, type_name) {
-            (Some(field_name), Some(type_name)) => Ok(CsharpClassField {
-                name: field_name,
+            (Some(field_name), Some(type_name)) => Ok(CsharpClassField::new(
+                field_name,
                 type_name,
                 attributes,
                 modifiers,
-            }),
+                DefinitionIndex(path.to_path_buf(), name_range),
+            )),
             _ => Err(()),
         }
     }
 }
 
 impl ParseFromNode for Vec<CsharpAttribute> {
-    fn get(node: Node, src: Arc<Rope>) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, _path: &Path) -> ParseResult<Self> {
         let mut cursor = node.walk();
 
         let mut attributes = vec![];

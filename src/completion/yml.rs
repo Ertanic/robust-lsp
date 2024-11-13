@@ -949,11 +949,7 @@ impl YamlCompletion {
         let fields = block(|| reflection.get_fields(&proto))
             .into_par_iter()
             .filter(|f| f.attributes.contains("DataField"))
-            .chain([CsharpClassField {
-                name: "id".to_owned(),
-                type_name: "string".to_owned(),
-                ..Default::default()
-            }])
+            .chain([CsharpClassField::new_empty("id", "string")])
             .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
             .map(|f| {
                 let name = f.get_data_field_name();

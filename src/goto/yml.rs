@@ -3,8 +3,9 @@ use crate::{
     backend::{CsharpClasses, YamlPrototypes},
     parse::{
         common::{DefinitionIndex, Index},
-        structs::csharp::{Component, Prototype},
+        structs::csharp::{Component, Prototype, ReflectionManager},
     },
+    utils::block,
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
@@ -66,7 +67,6 @@ impl YamlGotoDefinition {
         &self,
         found_node: Node<'_>,
     ) -> Option<GotoDefinitionResponse> {
-        tracing::trace!("try_goto_component_definition");
         let seeking = found_node.utf8_text(self.src.as_bytes()).ok()?;
 
         let mapping_pair_node = {
@@ -80,18 +80,20 @@ impl YamlGotoDefinition {
             node
         };
 
-        let value_node = mapping_pair_node.child_by_field_name("value")?;
-        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
-
-        if seeking != value {
-            return None;
-        }
-
         let key_node = mapping_pair_node.child_by_field_name("key")?;
         let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
         match key_name {
             "type" => {
+                let value = mapping_pair_node
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+
+                if seeking != value {
+                    return None;
+                }
+
                 let comp = block_in_place(|| self.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Component::try_from(c).ok())
@@ -100,7 +102,30 @@ impl YamlGotoDefinition {
                 let index = comp.index();
                 self.index_to_definition(index)
             }
-            _ => None
+            _ => {
+                if seeking != key_name {
+                    return None;
+                }
+
+                let comp_name = self
+                    .get_field(&mapping_pair_node.parent()?, "type")?
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+
+                let comp = block_in_place(|| self.classes.blocking_read())
+                    .par_iter()
+                    .filter_map(|c| Component::try_from(c).ok())
+                    .find_any(|p| camel_case(&p.get_component_name()) == camel_case(comp_name))?;
+
+                let reflection = ReflectionManager::new(self.classes.clone());
+                let field = block(|| reflection.get_fields(&comp))
+                    .into_iter()
+                    .find(|f| f.get_data_field_name() == key_name)?;
+
+                let index = field.index();
+                self.index_to_definition(index)
+            }
         }
     }
 
@@ -118,18 +143,20 @@ impl YamlGotoDefinition {
             node
         };
 
-        let value_node = mapping_pair_node.child_by_field_name("value")?;
-        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
-
-        if seeking != value {
-            return None;
-        }
-
         let key_node = mapping_pair_node.child_by_field_name("key")?;
         let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
         match key_name {
             "type" => {
+                let value = mapping_pair_node
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+
+                if seeking != value {
+                    return None;
+                }
+
                 let prototype = block_in_place(|| self.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Prototype::try_from(c).ok())
@@ -139,6 +166,15 @@ impl YamlGotoDefinition {
                 self.index_to_definition(index)
             }
             "parent" => {
+                let value = mapping_pair_node
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+
+                if seeking != value {
+                    return None;
+                }
+
                 let type_field_node = self.get_field(&mapping_pair_node.parent()?, "type")?;
                 let type_field_value = type_field_node
                     .child_by_field_name("value")?
@@ -154,7 +190,30 @@ impl YamlGotoDefinition {
                 let index = prototype.index();
                 self.index_to_definition(index)
             }
-            _ => None,
+            _ => {
+                if seeking != key_name {
+                    return None;
+                }
+
+                let proto_name = self
+                    .get_field(&mapping_pair_node.parent()?, "type")?
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+
+                let prototype = block_in_place(|| self.classes.blocking_read())
+                    .par_iter()
+                    .filter_map(|c| Prototype::try_from(c).ok())
+                    .find_any(|p| camel_case(&p.get_prototype_name()) == proto_name)?;
+
+                let reflection = ReflectionManager::new(self.classes.clone());
+                let field = block(|| reflection.get_fields(&prototype))
+                    .into_iter()
+                    .find(|f| f.get_data_field_name() == key_name)?;
+
+                let index = field.index();
+                self.index_to_definition(index)
+            }
         }
     }
 

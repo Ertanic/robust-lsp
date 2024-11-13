@@ -245,7 +245,7 @@ impl CsharpClass {
         attributes: CsharpAttributeCollection,
         fields: Vec<CsharpClassField>,
         modifiers: HashSet<String>,
-        range: Range,
+        index: DefinitionIndex,
     ) -> Self {
         Self {
             name,
@@ -253,7 +253,7 @@ impl CsharpClass {
             attributes,
             fields,
             modifiers,
-            index: DefinitionIndex(Default::default(), Some(range)),
+            index,
         }
     }
 
@@ -326,9 +326,35 @@ pub struct CsharpClassField {
     pub type_name: String,
     pub attributes: CsharpAttributeCollection,
     pub modifiers: HashSet<String>,
+
+    index: DefinitionIndex,
 }
 
 impl CsharpClassField {
+    pub fn new(
+        name: String,
+        type_name: String,
+        attributes: CsharpAttributeCollection,
+        modifiers: HashSet<String>,
+        index: DefinitionIndex,
+    ) -> Self {
+        Self {
+            name,
+            type_name,
+            attributes,
+            modifiers,
+            index,
+        }
+    }
+
+    pub fn new_empty<T: ToString>(name: T, type_name: T) -> Self {
+        Self {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            ..Default::default()
+        }
+    }
+
     pub fn get_data_field_name(&self) -> String {
         if let Some(attr) = self.attributes.get("DataField") {
             if let Some(name) = attr.arguments.get("tag") {
@@ -344,5 +370,11 @@ impl CsharpClassField {
         }
 
         stringcase::camel_case(&self.name)
+    }
+}
+
+impl Index for CsharpClassField {
+    fn index(&self) -> &DefinitionIndex {
+        &self.index
     }
 }

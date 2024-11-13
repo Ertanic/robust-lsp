@@ -3,7 +3,7 @@ use crate::{
     backend::{CsharpClasses, YamlPrototypes},
     parse::{
         common::{DefinitionIndex, Index},
-        structs::csharp::Prototype,
+        structs::csharp::{Component, Prototype},
     },
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -34,6 +34,7 @@ impl GotoDefinition for YamlGotoDefinition {
         let nest = self.get_nesting(&found_node);
         match nest {
             2 => self.try_goto_prototype_definition(found_node),
+            4 => self.try_goto_component_definition(found_node),
             _ => None,
         }
     }
@@ -58,6 +59,48 @@ impl YamlGotoDefinition {
             position,
             src,
             tree,
+        }
+    }
+
+    fn try_goto_component_definition(
+        &self,
+        found_node: Node<'_>,
+    ) -> Option<GotoDefinitionResponse> {
+        tracing::trace!("try_goto_component_definition");
+        let seeking = found_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        let mapping_pair_node = {
+            let mut node = found_node;
+            while let Some(n) = node.parent() {
+                node = n;
+                if n.kind() == "block_mapping_pair" {
+                    break;
+                }
+            }
+            node
+        };
+
+        let value_node = mapping_pair_node.child_by_field_name("value")?;
+        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        if seeking != value {
+            return None;
+        }
+
+        let key_node = mapping_pair_node.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        match key_name {
+            "type" => {
+                let comp = block_in_place(|| self.classes.blocking_read())
+                    .par_iter()
+                    .filter_map(|c| Component::try_from(c).ok())
+                    .find_any(|p| camel_case(&p.get_component_name()) == camel_case(seeking))?;
+
+                let index = comp.index();
+                self.index_to_definition(index)
+            }
+            _ => None
         }
     }
 
@@ -90,7 +133,6 @@ impl YamlGotoDefinition {
                 let prototype = block_in_place(|| self.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Prototype::try_from(c).ok())
-                    .inspect(|p| tracing::trace!("Found prototype: {:#?}", p.get_prototype_name()))
                     .find_any(|p| camel_case(&p.get_prototype_name()) == seeking)?;
 
                 let index = prototype.index();

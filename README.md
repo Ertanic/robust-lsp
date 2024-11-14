@@ -24,6 +24,7 @@ It is open to suggestion for extensions/improvements to the functionality.
 * Moving on to the definition:
     * Prototype in C# code
     * Prototype parent in yaml files
+* Inlay hints
 
 > [!NOTE]
 > The server is under development, so features are subject to change.

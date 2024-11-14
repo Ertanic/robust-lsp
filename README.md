@@ -4,6 +4,8 @@ The robust-lsp server provides a universal LSP interface to improve the experien
 
 Inspired by Robust YAML. However, the disadvantage of the latter is that it works exclusively in VS Code. The idea behind robust-lsp is that once you install it, you can use it wherever there is support for the LSP protocol. From VS Code and Raider to Emacs and Zed.
 
+![vscode-rider](https://github.com/user-attachments/assets/132d1ebb-bbcc-40ae-bd3e-67df4f9fe434)
+
 ## Capabilities
 
 It is open to suggestion for extensions/improvements to the functionality.

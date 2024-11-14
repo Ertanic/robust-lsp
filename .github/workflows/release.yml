@@ -1,5 +1,10 @@
 name: Release
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+    branches: [main]
 permissions: 
   contents: write
 jobs:

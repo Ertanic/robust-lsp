@@ -1,8 +1,12 @@
 use crate::{
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
+    hint::{yaml::YamlInlayHint, InlayHint},
     parse::{
-        common::Index, csharp, parse_project, structs::{csharp::CsharpClass, yaml::YamlPrototype}, yaml
+        common::Index,
+        csharp, parse_project,
+        structs::{csharp::CsharpClass, yaml::YamlPrototype},
+        yaml,
     },
     utils::check_project_compliance,
 };
@@ -19,8 +23,9 @@ use tower_lsp::{
     lsp_types::{
         CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
-        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, MessageType,
-        OneOf::Left, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams,
+        InlayHintParams, MessageType, OneOf::Left, ServerCapabilities, TextDocumentSyncCapability,
+        TextDocumentSyncKind, Url,
     },
     Client, LanguageServer,
 };
@@ -75,6 +80,7 @@ impl LanguageServer for Backend {
                 )),
                 completion_provider: Some(Default::default()),
                 definition_provider: Some(Left(true)),
+                inlay_hint_provider: Some(Left(true)),
                 ..Default::default()
             },
         })
@@ -288,6 +294,39 @@ impl LanguageServer for Backend {
                 }
             }
             _ => Ok(None)
+        }
+    }
+
+    async fn inlay_hint(
+        &self,
+        params: InlayHintParams,
+    ) -> Result<Option<Vec<tower_lsp::lsp_types::InlayHint>>> {
+        tracing::trace!("Inlay hint request has been received.");
+
+        let file = params.text_document.uri.to_file_path().unwrap_or_default();
+        let extension = file
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default();
+
+        match extension {
+            "yml" | "yaml" => {
+                let opened = self.opened_files.read().await;
+                let rope = opened.get(&params.text_document.uri);
+
+                match rope {
+                    Some(rope) => {
+                        let hint = YamlInlayHint::new(self.classes.clone(), params.range, rope);
+                        Ok(hint.inlay_hint())
+                    }
+                    None => {
+                        tracing::trace!("File wasn't cached.");
+                        Ok(None)
+                    }
+                }
+            }
+            _ => Ok(None),
         }
     }
 

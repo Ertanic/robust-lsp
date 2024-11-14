@@ -9,6 +9,7 @@ mod completion;
 mod goto;
 mod parse;
 mod utils;
+mod hint;
 
 #[tokio::main]
 async fn main() {

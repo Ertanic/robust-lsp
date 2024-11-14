@@ -1,4 +1,4 @@
-$GithubDownloadUrl = 'https://github.com/Ertanic/robust-lsp/releases/latest/download/robust-lsp.exe'
+$GithubDownloadUrl = 'https://github.com/Ertanic/robust-lsp/releases/latest/download/robust-lsp-win-x86_64.exe'
 $OutputFolder = "$env:USERPROFILE\.robust-lsp"
 $OutputFilename = "robust-lsp.exe"
 
@@ -7,7 +7,9 @@ try {
     Invoke-WebRequest -Uri $GithubDownloadUrl -OutFile "$OutputFolder\$OutputFilename"
     
     $PATH = [Environment]::GetEnvironmentVariable("PATH")
-    [Environment]::SetEnvironmentVariable("PATH", "$PATH;$OutputFolder", "User")
+    if ($PATH -notlike "*$OutputFolder*") {
+        [Environment]::SetEnvironmentVariable("PATH", "$PATH;$OutputFolder", "User")
+    }
 
     Write-Output "Robust LSP installed to $OutputFolder"
 }

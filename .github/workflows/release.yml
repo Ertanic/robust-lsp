@@ -1,5 +1,10 @@
 name: Release
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+    branches: [main]
 permissions: 
   contents: write
 jobs:
@@ -9,25 +14,38 @@ jobs:
                 os: [ubuntu-latest, windows-latest]
                 include:
                   - os: ubuntu-latest
-                    file: robust-lsp
+                    file: robust-lsp-linux-x86_64
                   - os: windows-latest
-                    file: robust-lsp.exe
+                    file: robust-lsp-win-x86_64.exe
         runs-on: ${{ matrix.os }}
         steps:
             - uses: actions/checkout@v4
+            
             - uses: actions-rs/toolchain@v1
               with:
                   toolchain: stable
+            
             - uses: Swatinem/rust-cache@v1
               with:
                 cache-on-failure: true
+            
             - name: Build
               run: cargo build --release
+            
             - name: Get package version
               id: cargo-get
               uses: nicolaiunrein/cargo-get@master
               with:
                 subcommand: package.version
+            
+            - name: Rename artifact (windows)
+              if: matrix.os == 'windows-latest'
+              run: mv target/release/robust-lsp.exe target/release/${{ matrix.file }}
+            
+            - name: Rename artifact (linux)
+              if: matrix.os == 'ubuntu-latest'
+              run: mv target/release/robust-lsp target/release/${{ matrix.file }}
+
             - name: Upload artifact
               uses: softprops/action-gh-release@v1
               with:

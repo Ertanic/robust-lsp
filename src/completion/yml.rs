@@ -1,6 +1,6 @@
 use super::{Completion, CompletionResult};
 use crate::{
-    backend::{CsharpClasses, YamlPrototypes},
+    backend::{CsharpClasses, FluentLocales, YamlPrototypes},
     parse::structs::{
         csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
         json::RsiMeta,
@@ -11,9 +11,10 @@ use rayon::prelude::*;
 use ropey::Rope;
 use std::{fs, path::PathBuf};
 use stringcase::camel_case;
+use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{
     self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
-    CompletionResponse, CompletionTextEdit, Position, TextEdit,
+    CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
 };
 use tracing::instrument;
 use tree_sitter::{Node, Parser, Point, Tree};
@@ -23,6 +24,7 @@ const SPRITES_RES_PATH: &str = "Resources/Textures/";
 pub struct YamlCompletion {
     classes: CsharpClasses,
     prototypes: YamlPrototypes,
+    locales: FluentLocales,
     position: Position,
     src: String,
     tree: Tree,
@@ -81,6 +83,7 @@ impl YamlCompletion {
     pub fn new(
         classes: CsharpClasses,
         prototypes: YamlPrototypes,
+        locales: FluentLocales,
         position: Position,
         src: &Rope,
         root_path: PathBuf,
@@ -94,6 +97,7 @@ impl YamlCompletion {
         Self {
             classes,
             prototypes,
+            locales,
             position,
             src,
             tree,
@@ -276,7 +280,7 @@ impl YamlCompletion {
                             end: position,
                         }
                     },
-                    new_text: format!("type: "),
+                    new_text: format!("type:"),
                 })),
                 ..Default::default()
             }]))
@@ -633,17 +637,15 @@ impl YamlCompletion {
     ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        match field.type_name.trim_end_matches('?') {
-            "bool" => Some(CompletionResponse::Array(
-                vec!["true", "false"]
-                    .into_iter()
-                    .map(|value| CompletionItem {
-                        label: value.to_string(),
-                        kind: Some(CompletionItemKind::VALUE),
-                        ..Default::default()
-                    })
-                    .collect::<Vec<_>>(),
-            )),
+        let items = match field.type_name.trim_end_matches('?') {
+            "bool" => vec!["true", "false"]
+                .into_iter()
+                .map(|value| CompletionItem {
+                    label: value.to_string(),
+                    kind: Some(CompletionItemKind::VALUE),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
             "EntProtoId" => {
                 let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
                 let entity_prototypes = lock.par_iter().filter(|p| p.prototype == "entity");
@@ -688,10 +690,7 @@ impl YamlCompletion {
                     }
                 };
 
-                Some(CompletionResponse::List(CompletionList {
-                    is_incomplete: true,
-                    items: prototypes,
-                }))
+                prototypes
             }
             value if value.starts_with("ProtoId<") => {
                 let inner = value.trim_start_matches("ProtoId<").trim_end_matches('>');
@@ -733,17 +732,81 @@ impl YamlCompletion {
                     }
                 };
 
-                if prototypes.is_empty() {
-                    None
-                } else {
-                    Some(CompletionResponse::List(CompletionList {
-                        is_incomplete: true,
-                        items: prototypes,
-                    }))
-                }
+                prototypes
             }
-            _ => None,
-        }
+            "LocId" => {
+                let lock = block_in_place(|| self.locales.blocking_read());
+                let map = |key: String, range: Option<Range>| CompletionItem {
+                    label: key.clone(),
+                    kind: Some(CompletionItemKind::VALUE),
+                    detail: Some("locale".to_owned()),
+                    text_edit: if let Some(range) = range {
+                        Some(CompletionTextEdit::Edit(TextEdit {
+                            new_text: key.clone(),
+                            range,
+                        }))
+                    } else {
+                        None
+                    },
+                    ..Default::default()
+                };
+
+                let locales = match node.child_by_field_name("value") {
+                    Some(value_node) => {
+                        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+
+                        tracing::trace!("Searching locales for {value}");
+
+                        let mut locales = lock
+                            .par_iter()
+                            .map(|l| (strsim::jaro_winkler(value, &l.key), l))
+                            .filter(|(diff, _)| *diff >= 0.8)
+                            .map(|(d, l)| {
+                                (
+                                    d,
+                                    map(l.key.clone(), {
+                                        let start = Position::new(
+                                            value_node.start_position().row as u32,
+                                            value_node.start_position().column as u32,
+                                        );
+                                        let end = Position::new(
+                                            value_node.end_position().row as u32,
+                                            value_node.end_position().column as u32,
+                                        );
+                                        Some(Range::new(start, end))
+                                    }),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        locales.sort_by_key(|(diff, _)| (*diff * 100.0) as u32);
+                        locales.reverse();
+                        locales.truncate(100);
+
+                        locales.into_iter().map(|(_, l)| l).collect::<Vec<_>>()
+                    }
+                    None => {
+                        let mut locales = lock
+                            .par_iter()
+                            .map(|l| map(l.key.clone(), None))
+                            .collect::<Vec<_>>();
+
+                        locales.truncate(100);
+                        locales
+                    }
+                };
+
+                locales
+            }
+            _ => vec![],
+        };
+
+        tracing::trace!("Items found: {}", items.len());
+
+        Some(CompletionResponse::List(CompletionList {
+            is_incomplete: true,
+            items,
+        }))
     }
 
     // Is that even a little bit readable? I don't know how else to rewrite it better...

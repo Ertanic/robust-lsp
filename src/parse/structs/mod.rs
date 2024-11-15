@@ -14,3 +14,4 @@ use std::{
 pub mod csharp;
 pub mod yaml;
 pub mod json;
+pub mod fluent;

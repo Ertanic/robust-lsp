@@ -1,17 +1,18 @@
 use crate::{
-    backend::{CsharpClasses, ParsedFiles, YamlPrototypes},
+    backend::{CsharpClasses, FluentLocales, ParsedFiles, YamlPrototypes},
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use async_scoped::TokioScope;
 use globset::Glob;
 use std::{num::NonZero, path::PathBuf, sync::Arc};
-use structs::{csharp::CsharpClass, yaml::YamlPrototype};
+use structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype};
 use tokio::sync::{Mutex, Semaphore};
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
 
 pub mod common;
 pub mod csharp;
+pub mod fluent;
 pub mod structs;
 pub mod yaml;
 
@@ -21,12 +22,14 @@ enum FileType {
     Component(PathBuf),
     Lazy(PathBuf),
     YamlPrototype(PathBuf),
+    Fluent(PathBuf),
 }
 
 enum ParseResult {
     Prototypes(Result<Vec<CsharpClass>, ()>),
     Components(Result<Vec<CsharpClass>, ()>),
     YamlPrototypes(Result<Vec<YamlPrototype>, ()>),
+    Fluent(Result<Vec<FluentKey>, ()>),
 }
 
 #[instrument(skip_all)]
@@ -35,6 +38,7 @@ pub async fn parse_project(
     classes: CsharpClasses,
     prototypes: YamlPrototypes,
     parsed_files: ParsedFiles,
+    locales: FluentLocales,
     client: Arc<tower_lsp::Client>,
 ) -> bool {
     tracing::trace!("Started parsing project");
@@ -46,17 +50,20 @@ pub async fn parse_project(
     let components_len = files.components.len();
     let other_len = files.other.len();
     let yaml_protos_len = files.yaml_prototypes.len();
+    let fluent_len = files.fluent.len();
 
     tracing::info!("{components_len} components files found");
     tracing::info!("{prototypes_len} C# prototypes files found");
     tracing::info!("{other_len} other C# files found");
     tracing::info!("{yaml_protos_len} prototypes files found");
+    tracing::info!("{fluent_len} fluent files found");
 
     let (tx, rx) = std::sync::mpsc::channel();
 
     let proto_status = get_status(client.clone(), "C# prototypes").await;
     let comps_status = get_status(client.clone(), "components").await;
     let yaml_protos_status = get_status(client.clone(), "YAML prototypes").await;
+    let fluent_status = get_status(client.clone(), "locales").await;
 
     let reader = tokio::spawn({
         let classes = classes.clone();
@@ -65,9 +72,11 @@ pub async fn parse_project(
             let prototypes_len = prototypes_len as u32;
             let components_len = components_len as u32;
             let yaml_protos_len = yaml_protos_len as u32;
+            let fluent_len = fluent_len as u32;
             let mut actual_prototypes = 0;
             let mut actual_components = 0;
             let mut actual_yaml_protos = 0;
+            let mut actual_fluent = 0;
 
             for message in rx {
                 match message {
@@ -121,12 +130,29 @@ pub async fn parse_project(
                             )
                             .await
                     }
+                    ParseResult::Fluent(fluent) => {
+                        if let Ok(fluent) = fluent {
+                            locales.write().await.extend(fluent);
+                        }
+
+                        actual_fluent += 1;
+                        let percent = percentage(actual_fluent, fluent_len);
+                        fluent_status
+                            .lock()
+                            .await
+                            .next_state(
+                                percent as u32,
+                                Some(format!("{actual_fluent}/{fluent_len} ({percent}%)")),
+                            )
+                            .await
+                    }
                 }
             }
 
             proto_status.lock().await.finish(None).await;
             comps_status.lock().await.finish(None).await;
             yaml_protos_status.lock().await.finish(None).await;
+            fluent_status.lock().await.finish(None).await;
         }
     });
 
@@ -139,7 +165,7 @@ pub async fn parse_project(
                     let tx = tx.clone();
 
                     s.spawn(async move {
-                        let parsed_classes = csharp::parse(p.clone(), parsed_files.clone()).await;
+                        let parsed_classes = csharp::parse(p, parsed_files.clone()).await;
                         tx.send(ParseResult::Prototypes(parsed_classes)).unwrap();
                     });
                 }
@@ -156,7 +182,7 @@ pub async fn parse_project(
                     let tx = tx.clone();
 
                     s.spawn(async move {
-                        let parsed_classes = csharp::parse(c.clone(), parsed_files.clone()).await;
+                        let parsed_classes = csharp::parse(c, parsed_files.clone()).await;
                         tx.send(ParseResult::Components(parsed_classes)).unwrap();
                     });
                 }
@@ -165,6 +191,7 @@ pub async fn parse_project(
             });
         });
 
+        // Run YAML prototypes parsing
         s.spawn(async {
             TokioScope::scope_and_block(|s| {
                 for p in files.yaml_prototypes {
@@ -172,8 +199,22 @@ pub async fn parse_project(
                     let tx = tx.clone();
 
                     s.spawn(async move {
-                        let parsed_protos = yaml::parse(p.clone(), parsed_files).await;
+                        let parsed_protos = yaml::parse(p, parsed_files).await;
                         tx.send(ParseResult::YamlPrototypes(parsed_protos)).unwrap();
+                    });
+                }
+            });
+        });
+
+        // Run fluent parsing
+        s.spawn(async {
+            TokioScope::scope_and_block(|s| {
+                for f in files.fluent {
+                    let tx = tx.clone();
+
+                    s.spawn(async move {
+                        let parsed_fluent = fluent::parse(f).await;
+                        tx.send(ParseResult::Fluent(parsed_fluent)).unwrap();
                     });
                 }
             });
@@ -274,6 +315,7 @@ fn get_folders(uri: &Url) -> Vec<PathBuf> {
         "Content.Server",
         "Content.Shared",
         "Resources/Prototypes",
+        "Resources/Locale",
     ]
     .into_iter()
     .map(|f| uri.to_file_path().unwrap().join(f))
@@ -286,6 +328,7 @@ struct CollectedFiles {
     components: Vec<PathBuf>,
     other: Vec<PathBuf>,
     yaml_prototypes: Vec<PathBuf>,
+    fluent: Vec<PathBuf>,
 }
 
 async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
@@ -293,6 +336,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
     let mut prototypes = vec![];
     let mut components = vec![];
     let mut other = vec![];
+    let mut fluent = vec![];
 
     TokioScope::scope_and_block(|s| {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -305,6 +349,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                 let proto_set = Glob::new("*Prototype.cs").unwrap().compile_matcher();
                 let comp_set = Glob::new("*Component.cs").unwrap().compile_matcher();
                 let csharp_set = Glob::new("*.cs").unwrap().compile_matcher();
+                let fluent_set = Glob::new("*.ftl").unwrap().compile_matcher();
                 let yaml_set = Glob::new("**/Prototypes/**/*.{yml,yaml}")
                     .unwrap()
                     .compile_matcher();
@@ -320,6 +365,8 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                             tx.send(FileType::Lazy(path.to_owned())).unwrap();
                         } else if yaml_set.is_match(path) {
                             tx.send(FileType::YamlPrototype(path.to_owned())).unwrap();
+                        } else if fluent_set.is_match(path) {
+                            tx.send(FileType::Fluent(path.to_owned())).unwrap();
                         }
                     }
                 }
@@ -335,6 +382,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
                     FileType::Component(path) => components.push(path),
                     FileType::Lazy(path) => other.push(path),
                     FileType::YamlPrototype(path) => yaml_prototypes.push(path),
+                    FileType::Fluent(path) => fluent.push(path),
                 }
             }
         });
@@ -345,6 +393,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
         components,
         other,
         yaml_prototypes,
+        fluent,
     }
 }
 

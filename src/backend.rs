@@ -5,7 +5,7 @@ use crate::{
     parse::{
         common::Index,
         csharp, parse_project,
-        structs::{csharp::CsharpClass, yaml::YamlPrototype},
+        structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype},
         yaml,
     },
     utils::check_project_compliance,
@@ -32,6 +32,7 @@ use tower_lsp::{
 use tracing::instrument;
 use tree_sitter::Tree;
 
+pub(crate) type FluentLocales = Arc<RwLock<HashSet<FluentKey>>>;
 pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
@@ -42,6 +43,7 @@ pub(crate) struct Backend {
     parsed_files: ParsedFiles,
     classes: CsharpClasses,
     prototypes: YamlPrototypes,
+    locales: FluentLocales,
     root_uri: Arc<RwLock<Option<Url>>>,
 }
 
@@ -53,6 +55,7 @@ impl Backend {
             parsed_files: ParsedFiles::default(),
             classes: CsharpClasses::default(),
             prototypes: Default::default(),
+            locales: Default::default(),
             root_uri: Default::default(),
         }
     }
@@ -102,6 +105,7 @@ impl LanguageServer for Backend {
             self.classes.clone(),
             self.prototypes.clone(),
             self.parsed_files.clone(),
+            self.locales.clone(),
             self.client.clone(),
         )
         .await;
@@ -259,7 +263,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position.position, rope, root_path);
+                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), self.locales.clone(), params.text_document_position.position, rope, root_path);
                         Ok(completion.completion())
                     },
                     None => Ok(None)

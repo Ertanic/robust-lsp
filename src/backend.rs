@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
-        CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
         GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams,
         InlayHintParams, MessageType, OneOf::Left, ServerCapabilities, TextDocumentSyncCapability,
@@ -78,7 +78,10 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
-                completion_provider: Some(Default::default()),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![" ".to_string()]),
+                    ..Default::default()
+                }),
                 definition_provider: Some(Left(true)),
                 inlay_hint_provider: Some(Left(true)),
                 ..Default::default()

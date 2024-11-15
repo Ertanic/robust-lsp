@@ -1,5 +1,3 @@
-use std::{env, fs, path::PathBuf};
-
 use super::{Completion, CompletionResult};
 use crate::{
     backend::{CsharpClasses, YamlPrototypes},
@@ -11,11 +9,13 @@ use crate::{
 };
 use rayon::prelude::*;
 use ropey::Rope;
+use std::{fs, path::PathBuf};
 use stringcase::camel_case;
 use tower_lsp::lsp_types::{
     self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
     CompletionResponse, CompletionTextEdit, Position, TextEdit,
 };
+use tracing::instrument;
 use tree_sitter::{Node, Parser, Point, Tree};
 
 const SPRITES_RES_PATH: &str = "Resources/Textures/";
@@ -26,6 +26,7 @@ pub struct YamlCompletion {
     position: Position,
     src: String,
     tree: Tree,
+    root_path: PathBuf,
 }
 
 impl Completion for YamlCompletion {
@@ -82,6 +83,7 @@ impl YamlCompletion {
         prototypes: YamlPrototypes,
         position: Position,
         src: &Rope,
+        root_path: PathBuf,
     ) -> Self {
         let src = src.to_string();
 
@@ -95,6 +97,7 @@ impl YamlCompletion {
             position,
             src,
             tree,
+            root_path,
         }
     }
 
@@ -336,6 +339,7 @@ impl YamlCompletion {
         }
     }
 
+    #[instrument(skip_all, ret)]
     fn component_field_type_completion(
         &self,
         node: Node,
@@ -363,8 +367,7 @@ impl YamlCompletion {
     fn state_field_type_completion(&self, node: Node) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        let current_folder = env::current_dir().ok()?;
-        let sprites_folder = current_folder.join(SPRITES_RES_PATH);
+        let sprites_folder = self.root_path.join(SPRITES_RES_PATH);
         if !sprites_folder.exists() {
             return None;
         }
@@ -375,11 +378,13 @@ impl YamlCompletion {
         let sprite_path = sprite_node.utf8_text(self.src.as_bytes()).ok()?;
 
         if !sprite_path.ends_with(".rsi") {
+            tracing::trace!("sprite path does not end with .rsi");
             return None;
         }
 
         let path = sprites_folder.join(sprite_path);
         if !path.exists() || !path.is_dir() {
+            tracing::trace!("{path:?} does not exist");
             return None;
         }
 
@@ -387,10 +392,17 @@ impl YamlCompletion {
         let meta_path = path.join("meta.json");
 
         if !meta_path.exists() || !meta_path.is_file() {
+            tracing::trace!("{meta_path:?} does not exist");
             return None;
         }
 
-        let meta: RsiMeta = serde_json::from_reader(fs::File::open(meta_path).ok()?).ok()?;
+        let meta: RsiMeta = match serde_json::from_reader(fs::File::open(&meta_path).ok()?) {
+            Ok(meta) => meta,
+            Err(err) => {
+                tracing::error!("Failed to read {meta_path:?}: {err}");
+                return None;
+            }
+        };
 
         let map = |s: String| CompletionItem {
             label: s,
@@ -436,9 +448,7 @@ impl YamlCompletion {
     fn sprite_field_type_completion(&self, node: Node) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        let current_folder = env::current_dir().ok()?;
-        let sprites_folder = current_folder.join(SPRITES_RES_PATH);
-        tracing::trace!("sprite folder: {sprites_folder:?}");
+        let sprites_folder = self.root_path.join(SPRITES_RES_PATH);
         if !sprites_folder.exists() {
             return None;
         }
@@ -449,11 +459,13 @@ impl YamlCompletion {
                 if value.ends_with('/') {
                     let path = sprites_folder.join(value);
                     if !path.exists() || !path.is_dir() {
+                        tracing::trace!("{path:?} does not exist");
                         return None;
                     }
 
                     let last = value.split('/').filter(|s| !s.is_empty()).last()?;
                     if last.ends_with(".rsi") {
+                        tracing::trace!("{last} ends with .rsi");
                         return None;
                     }
 
@@ -490,6 +502,7 @@ impl YamlCompletion {
                     let last = parts.last()?.to_owned();
 
                     if last.ends_with(".rsi") {
+                        tracing::trace!("{last} ends with .rsi");
                         return None;
                     }
 
@@ -501,6 +514,7 @@ impl YamlCompletion {
                             .join(parts.into_iter().take(parts_count - 1).collect::<PathBuf>())
                     };
                     if !sprites_path.exists() || !sprites_path.is_dir() {
+                        tracing::trace!("{sprites_path:?} does not exist");
                         return None;
                     }
 
@@ -557,15 +571,25 @@ impl YamlCompletion {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into_owned();
-                        CompletionItem {
-                            label: name.clone(),
-                            kind: Some(if path.is_dir() {
-                                CompletionItemKind::FOLDER
-                            } else {
-                                CompletionItemKind::FILE
-                            }),
-                            insert_text: Some(format!("{name}/")),
-                            ..Default::default()
+
+                        if name.ends_with(".rsi") {
+                            CompletionItem {
+                                label: name.clone(),
+                                kind: Some(CompletionItemKind::FILE),
+                                insert_text: Some(format!("{name}/")),
+                                ..Default::default()
+                            }
+                        } else {
+                            CompletionItem {
+                                label: name.clone(),
+                                kind: Some(if path.is_dir() {
+                                    CompletionItemKind::FOLDER
+                                } else {
+                                    CompletionItemKind::FILE
+                                }),
+                                insert_text: Some(format!("{name}/")),
+                                ..Default::default()
+                            }
                         }
                     })
                     .collect();

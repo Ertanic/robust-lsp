@@ -11,7 +11,7 @@ pub struct Size2d {
 #[derive(Deserialize, Debug, Clone)]
 pub struct RsiState {
     pub name: String,
-    pub directions: u8,
+    pub directions: Option<u8>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

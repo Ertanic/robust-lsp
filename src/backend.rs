@@ -247,6 +247,8 @@ impl LanguageServer for Backend {
         let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
         let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
 
+        let root_path = self.root_uri.read().await.clone().unwrap().to_file_path().unwrap_or_default();
+
         match extension {
             "yml" | "yaml" => {
                 let opened = self.opened_files.read().await;
@@ -254,7 +256,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position.position, rope);
+                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position.position, rope, root_path);
                         Ok(completion.completion())
                     },
                     None => Ok(None)

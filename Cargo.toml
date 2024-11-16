@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 async-scoped = { version = "0.9.0", features = ["use-tokio"] }
 clap = { version = "4.5.20", features = ["cargo"] }
-fluent-syntax = "0.11.1"
+fluent-syntax = { git = "https://github.com/Ertanic/fluent-rs", branch = "span", features = [
+    "spans",
+], package = "fluent-syntax" }
 globset = "0.4.15"
 rayon = "1.10.0"
 ropey = "1.6.1"

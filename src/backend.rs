@@ -293,7 +293,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let definition = YamlGotoDefinition::new(self.classes.clone(), self.prototypes.clone(), params.text_document_position_params.position, rope);
+                        let definition = YamlGotoDefinition::new(self.classes.clone(), self.prototypes.clone(), self.locales.clone(), params.text_document_position_params.position, rope);
                         Ok(definition.goto_definition())
                     }
                     None => {

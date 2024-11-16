@@ -252,9 +252,9 @@ checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
 [[package]]
 name = "fluent-syntax"
 version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a530c4694a6a8d528794ee9bbd8ba0122e779629ac908d15ad5a7ae7763a33d"
+source = "git+https://github.com/Ertanic/fluent-rs?branch=span#4d64dbfda371324b7d74aaf7a5dce54a9e3b1073"
 dependencies = [
+ "memchr",
  "thiserror",
 ]
 
@@ -662,7 +662,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "robust-lsp"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-scoped",
  "cc",

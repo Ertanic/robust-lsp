@@ -1,9 +1,9 @@
 use ropey::Rope;
 use std::{path::{Path, PathBuf}, sync::Arc};
-use tree_sitter::{Node, Range};
+use tree_sitter::Node;
 
-#[derive(Debug, Clone, Default)]
-pub struct DefinitionIndex(pub PathBuf, pub Option<Range>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DefinitionIndex(pub PathBuf, pub Option<tree_sitter::Range>);
 
 pub trait Index {
     fn index(&self) -> &DefinitionIndex;

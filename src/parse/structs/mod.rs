@@ -1,7 +1,3 @@
-use super::{
-    common::{DefinitionIndex, Index},
-    CsharpClasses,
-};
 use crate::parse::common;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::{

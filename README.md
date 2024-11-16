@@ -24,6 +24,7 @@ It is open to suggestion for extensions/improvements to the functionality.
 * Moving on to the definition:
     * Prototype in C# code
     * Prototype parent in yaml files
+    * ftl key from yaml
 * Inlay hints
 
 > [!NOTE]

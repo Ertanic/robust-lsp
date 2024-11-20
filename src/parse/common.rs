@@ -1,5 +1,9 @@
+use super::Result;
 use ropey::Rope;
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tree_sitter::Node;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -9,10 +13,8 @@ pub trait Index {
     fn index(&self) -> &DefinitionIndex;
 }
 
-pub type ParseResult<T> = Result<T, ()>;
-
 pub(super) trait ParseFromNode {
-    fn get(node: Node, src: Arc<Rope>, path: &Path) -> ParseResult<Self>
+    fn get(node: Node, src: Arc<Rope>, path: &Path) -> Result<Self>
     where
         Self: Sized;
 }

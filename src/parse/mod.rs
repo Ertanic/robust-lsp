@@ -1,12 +1,17 @@
 use crate::{
-    backend::{CsharpClasses, FluentLocales, ParsedFiles, YamlPrototypes},
+    backend::{Context, ParsedFiles},
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use async_scoped::TokioScope;
-use globset::Glob;
-use std::{num::NonZero, path::PathBuf, sync::Arc};
+use futures::future::BoxFuture;
+use globset::{Glob, GlobMatcher};
+use rayon::prelude::*;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
 
@@ -16,294 +21,11 @@ pub mod fluent;
 pub mod structs;
 pub mod yaml;
 
-#[derive(Debug)]
-enum FileType {
-    Prototype(PathBuf),
-    Component(PathBuf),
-    Lazy(PathBuf),
-    YamlPrototype(PathBuf),
-    Fluent(PathBuf),
-}
-
-enum ParseResult {
-    Prototypes(Result<Vec<CsharpClass>, ()>),
-    Components(Result<Vec<CsharpClass>, ()>),
-    YamlPrototypes(Result<Vec<YamlPrototype>, ()>),
-    Fluent(Result<Vec<FluentKey>, ()>),
-}
-
-#[instrument(skip_all)]
-pub async fn parse_project(
-    uri: Url,
-    classes: CsharpClasses,
-    prototypes: YamlPrototypes,
-    parsed_files: ParsedFiles,
-    locales: FluentLocales,
-    client: Arc<tower_lsp::Client>,
-) -> bool {
-    tracing::trace!("Started parsing project");
-
-    let folders = get_folders(&uri);
-    let files = collect_files(folders).await;
-
-    let prototypes_len = files.prototypes.len();
-    let components_len = files.components.len();
-    let other_len = files.other.len();
-    let yaml_protos_len = files.yaml_prototypes.len();
-    let fluent_len = files.fluent.len();
-
-    tracing::info!("{components_len} components files found");
-    tracing::info!("{prototypes_len} C# prototypes files found");
-    tracing::info!("{other_len} other C# files found");
-    tracing::info!("{yaml_protos_len} prototypes files found");
-    tracing::info!("{fluent_len} fluent files found");
-
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    let proto_status = get_status(client.clone(), "C# prototypes").await;
-    let comps_status = get_status(client.clone(), "components").await;
-    let yaml_protos_status = get_status(client.clone(), "YAML prototypes").await;
-    let fluent_status = get_status(client.clone(), "locales").await;
-
-    let reader = tokio::spawn({
-        let classes = classes.clone();
-
-        async move {
-            let prototypes_len = prototypes_len as u32;
-            let components_len = components_len as u32;
-            let yaml_protos_len = yaml_protos_len as u32;
-            let fluent_len = fluent_len as u32;
-            let mut actual_prototypes = 0;
-            let mut actual_components = 0;
-            let mut actual_yaml_protos = 0;
-            let mut actual_fluent = 0;
-
-            for message in rx {
-                match message {
-                    ParseResult::Prototypes(csharp_class) => {
-                        if let Ok(csharp_class) = csharp_class {
-                            classes.write().await.extend(csharp_class);
-                        }
-
-                        actual_prototypes += 1;
-                        let percent = percentage(actual_prototypes, prototypes_len);
-                        proto_status
-                            .lock()
-                            .await
-                            .next_state(
-                                percent as u32,
-                                Some(format!("{actual_prototypes}/{prototypes_len} ({percent}%)")),
-                            )
-                            .await;
-                    }
-                    ParseResult::Components(csharp_class) => {
-                        if let Ok(csharp_class) = csharp_class {
-                            classes.write().await.extend(csharp_class);
-                        }
-
-                        actual_components += 1;
-                        let percent = percentage(actual_components, components_len);
-                        comps_status
-                            .lock()
-                            .await
-                            .next_state(
-                                percent as u32,
-                                Some(format!("{actual_components}/{components_len} ({percent}%)")),
-                            )
-                            .await
-                    }
-                    ParseResult::YamlPrototypes(yaml_protos) => {
-                        if let Ok(yaml_protos) = yaml_protos {
-                            prototypes.write().await.extend(yaml_protos);
-                        }
-
-                        actual_yaml_protos += 1;
-                        let percent = percentage(actual_yaml_protos, yaml_protos_len);
-                        proto_status
-                            .lock()
-                            .await
-                            .next_state(
-                                percent as u32,
-                                Some(format!(
-                                    "{actual_yaml_protos}/{yaml_protos_len} ({percent}%)"
-                                )),
-                            )
-                            .await
-                    }
-                    ParseResult::Fluent(fluent) => {
-                        if let Ok(fluent) = fluent {
-                            locales.write().await.extend(fluent);
-                        }
-
-                        actual_fluent += 1;
-                        let percent = percentage(actual_fluent, fluent_len);
-                        fluent_status
-                            .lock()
-                            .await
-                            .next_state(
-                                percent as u32,
-                                Some(format!("{actual_fluent}/{fluent_len} ({percent}%)")),
-                            )
-                            .await
-                    }
-                }
-            }
-
-            proto_status.lock().await.finish(None).await;
-            comps_status.lock().await.finish(None).await;
-            yaml_protos_status.lock().await.finish(None).await;
-            fluent_status.lock().await.finish(None).await;
-        }
-    });
-
-    TokioScope::scope_and_block(|s| {
-        // Run C# prototypes parsing
-        s.spawn(async {
-            TokioScope::scope_and_block(|s| {
-                for p in files.prototypes {
-                    let parsed_files = parsed_files.clone();
-                    let tx = tx.clone();
-
-                    s.spawn(async move {
-                        let parsed_classes = csharp::parse(p, parsed_files.clone()).await;
-                        tx.send(ParseResult::Prototypes(parsed_classes)).unwrap();
-                    });
-                }
-
-                tracing::trace!("All C# prototypes has been sent for parsing");
-            });
-        });
-
-        // Run components parsing
-        s.spawn(async {
-            TokioScope::scope_and_block(|s| {
-                for c in files.components {
-                    let parsed_files = parsed_files.clone();
-                    let tx = tx.clone();
-
-                    s.spawn(async move {
-                        let parsed_classes = csharp::parse(c, parsed_files.clone()).await;
-                        tx.send(ParseResult::Components(parsed_classes)).unwrap();
-                    });
-                }
-
-                tracing::trace!("All components has been sent for parsing");
-            });
-        });
-
-        // Run YAML prototypes parsing
-        s.spawn(async {
-            TokioScope::scope_and_block(|s| {
-                for p in files.yaml_prototypes {
-                    let parsed_files = parsed_files.clone();
-                    let tx = tx.clone();
-
-                    s.spawn(async move {
-                        let parsed_protos = yaml::parse(p, parsed_files).await;
-                        tx.send(ParseResult::YamlPrototypes(parsed_protos)).unwrap();
-                    });
-                }
-            });
-        });
-
-        // Run fluent parsing
-        s.spawn(async {
-            TokioScope::scope_and_block(|s| {
-                for f in files.fluent {
-                    let tx = tx.clone();
-
-                    s.spawn(async move {
-                        let parsed_fluent = fluent::parse(f).await;
-                        tx.send(ParseResult::Fluent(parsed_fluent)).unwrap();
-                    });
-                }
-            });
-        });
-
-        // Run other files parsing
-        tokio::spawn({
-            let client = client.clone();
-            let classes = classes.clone();
-            let parsed_files = parsed_files.clone();
-
-            async move {
-                // Since the rest of the files are not of great urgency, we'll lazily parse them in the background.
-                // And in order not to load the user's system, only half of the threads will be used.
-                let threads = std::thread::available_parallelism()
-                    .unwrap_or(NonZero::new(2).unwrap())
-                    .get()
-                    / 2;
-
-                tracing::trace!(
-                    "Using {} threads for parsing other files in the background",
-                    threads
-                );
-
-                let semaphore = Arc::new(Semaphore::new(threads));
-                let (tx, rx) = std::sync::mpsc::channel();
-
-                let other_status = get_status(client.clone(), "C# files").await;
-
-                tokio::spawn({
-                    let other_status = other_status.clone();
-
-                    async move {
-                        let mut i = 0;
-                        let other_len = other_len as u32;
-
-                        for message in rx {
-                            if let Ok(parsed_files) = message {
-                                classes.write().await.extend(parsed_files);
-                            }
-
-                            i += 1;
-                            let percent = percentage(i, other_len);
-                            other_status
-                                .lock()
-                                .await
-                                .next_state(percent, Some(format!("{i}/{other_len} ({percent}%)")))
-                                .await;
-                        }
-
-                        other_status
-                            .lock()
-                            .await
-                            .finish(Some("C# files parsed"))
-                            .await;
-                    }
-                });
-
-                tracing::trace!("All other files has been sent for parsing");
-
-                let mut handles = Vec::with_capacity(files.other.len());
-
-                for o in files.other {
-                    let parsed_files = parsed_files.clone();
-                    let semaphore = semaphore.clone();
-                    let tx = tx.clone();
-
-                    handles.push(tokio::spawn(async move {
-                        let _permit = semaphore.acquire().await.unwrap();
-
-                        let parsed_classes = csharp::parse(o.clone(), parsed_files.clone()).await;
-                        tx.send(parsed_classes).unwrap();
-                    }));
-                }
-
-                for handle in handles {
-                    handle.await.unwrap();
-                }
-            }
-        });
-    });
-    tracing::trace!("All C# files has been sent for parsing");
-
-    let res = reader.is_finished();
-
-    tracing::trace!("Finished parsing project");
-
-    res
-}
+pub(crate) type Result<T, E = ()> = std::result::Result<T, E>;
+#[rustfmt::skip]
+pub(crate) type Parser = Arc<dyn (Fn(PathBuf, ParsedFiles) -> BoxFuture<'static, Result<ParseResult>>) + Send + Sync>;
+#[rustfmt::skip]
+pub(crate) type ResultDispatcher = Arc<dyn (Fn(ParseResult, Arc<Context>) -> BoxFuture<'static, ()>) + Send + Sync>;
 
 #[inline(always)]
 fn get_folders(uri: &Url) -> Vec<PathBuf> {
@@ -323,77 +45,237 @@ fn get_folders(uri: &Url) -> Vec<PathBuf> {
     .collect()
 }
 
-struct CollectedFiles {
-    prototypes: Vec<PathBuf>,
-    components: Vec<PathBuf>,
-    other: Vec<PathBuf>,
-    yaml_prototypes: Vec<PathBuf>,
-    fluent: Vec<PathBuf>,
+pub enum ParseResult {
+    Csharp(Vec<CsharpClass>),
+    YamlPrototypes(Vec<YamlPrototype>),
+    Fluent(Vec<FluentKey>),
 }
 
-async fn collect_files(folders: Vec<PathBuf>) -> CollectedFiles {
-    let mut yaml_prototypes = vec![];
-    let mut prototypes = vec![];
-    let mut components = vec![];
-    let mut other = vec![];
-    let mut fluent = vec![];
+pub struct ProjectParser {
+    uri: Url,
+    context: Arc<Context>,
+    client: Arc<Client>,
+}
+
+impl ProjectParser {
+    pub fn new(uri: Url, context: Arc<Context>, client: Arc<Client>) -> Self {
+        Self {
+            uri,
+            context,
+            client,
+        }
+    }
+
+    pub async fn parse<'a>(&self, matchers: Vec<FileGroup>) {
+        let matchers = Arc::new(matchers);
+
+        let folders = get_folders(&self.uri);
+        let collected_files = collect_files(folders, matchers.clone());
+
+        let mut files_handlers = futures::future::join_all(
+            collected_files
+                .iter()
+                .inspect(|(id, files)| tracing::info!("{} {id} files found", files.len()))
+                .map(|(id, files)| async {
+                    ParserHandler {
+                        id: id.clone(),
+                        actual_count: 0,
+                        total_count: files.len() as u32,
+                        status: get_status(self.client.clone(), &id.clone()).await,
+                        finished: false,
+                    }
+                }),
+        )
+        .await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+        tokio::spawn({
+            let matchers = matchers.clone();
+            let context = self.context.clone();
+            async move {
+                while let Some((id, result)) = rx.recv().await {
+                    files_handlers
+                        .iter_mut()
+                        .find(|h| h.id == id)
+                        .unwrap()
+                        .increment()
+                        .await;
+
+                    let Ok(result) = result else {
+                        continue;
+                    };
+
+                    let matcher = matchers.par_iter().find_any(|m| m.id == id).unwrap();
+                    let dispatcher = &matcher.dispatcher;
+                    dispatcher(result, context.clone()).await;
+                }
+                futures::future::join_all(
+                    files_handlers
+                        .iter_mut()
+                        .map(|h| async move { h.finish().await }),
+                )
+                .await;
+
+                tracing::trace!("Parsing finished.");
+            }
+        });
+
+        let handlers = futures::future::join_all(
+            collected_files
+                .into_iter()
+                .map(|(id, files)| {
+                    let id = id.clone();
+                    let matchers = matchers.clone();
+                    let tx = tx.clone();
+
+                    files.into_iter().map(move |f| {
+                        let tx = tx.clone();
+                        let context = self.context.clone();
+                        let matchers = matchers.clone();
+                        let id = id.clone();
+
+                        tokio::spawn(async move {
+                            let matcher = matchers.iter().find(|m| m.id == id).unwrap();
+                            let parser = matcher.parser.clone();
+                            let result = parser(f, context.parsed_files.clone()).await;
+
+                            if let Err(err) = tx.send((matcher.id.clone(), result)).await {
+                                tracing::error!("Failed to send result: {}", err);
+                            }
+                        })
+                    })
+                })
+                .flatten(),
+        );
+
+        handlers.await;
+    }
+}
+
+pub struct FileGroup {
+    id: String,
+    parser: Parser,
+    dispatcher: ResultDispatcher,
+    set: GlobMatcher,
+}
+
+impl FileGroup {
+    pub fn new(
+        id: impl ToString,
+        set: impl AsRef<str>,
+        parser: Parser,
+        dispatcher: ResultDispatcher,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            parser,
+            dispatcher,
+            set: Glob::new(set.as_ref()).unwrap().compile_matcher(),
+        }
+    }
+
+    fn is_match(&self, path: &Path) -> bool {
+        self.set.is_match(path)
+    }
+}
+
+fn collect_files(
+    folders: Vec<PathBuf>,
+    matches: Arc<Vec<FileGroup>>,
+) -> Vec<(String, Vec<PathBuf>)> {
+    let mut files: Vec<(String, Vec<PathBuf>)> = vec![];
 
     TokioScope::scope_and_block(|s| {
         let (tx, rx) = std::sync::mpsc::channel();
 
-        for folder in folders {
+        folders.into_iter().for_each(|folder| {
             let tx = tx.clone();
+            let matches = matches.clone();
 
             s.spawn(async move {
                 tracing::trace!("Start file search in {} folder", folder.display());
-                let proto_set = Glob::new("*Prototype.cs").unwrap().compile_matcher();
-                let comp_set = Glob::new("*Component.cs").unwrap().compile_matcher();
-                let csharp_set = Glob::new("*.cs").unwrap().compile_matcher();
-                let fluent_set = Glob::new("*.ftl").unwrap().compile_matcher();
-                let yaml_set = Glob::new("**/Prototypes/**/*.{yml,yaml}")
-                    .unwrap()
-                    .compile_matcher();
 
                 for file in walkdir::WalkDir::new(&folder) {
-                    if let Ok(file) = file {
-                        let path = file.path();
-                        if proto_set.is_match(path) {
-                            tx.send(FileType::Prototype(path.to_owned())).unwrap();
-                        } else if comp_set.is_match(path) {
-                            tx.send(FileType::Component(path.to_owned())).unwrap();
-                        } else if csharp_set.is_match(path) {
-                            tx.send(FileType::Lazy(path.to_owned())).unwrap();
-                        } else if yaml_set.is_match(path) {
-                            tx.send(FileType::YamlPrototype(path.to_owned())).unwrap();
-                        } else if fluent_set.is_match(path) {
-                            tx.send(FileType::Fluent(path.to_owned())).unwrap();
+                    match file {
+                        Ok(file) => {
+                            let path = file.path();
+                            let matcher = matches.iter().find(|m| m.is_match(path));
+
+                            if let Some(matcher) = matcher {
+                                if let Err(err) = tx.send((matcher.id.clone(), path.to_path_buf()))
+                                {
+                                    tracing::error!("Failed to send file: {}", err);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!("Failed to read file: {}", err);
                         }
                     }
                 }
 
                 tracing::trace!("End file search in {} folder", folder.display());
             });
-        }
+        });
 
         s.spawn(async {
-            for message in rx {
-                match message {
-                    FileType::Prototype(path) => prototypes.push(path),
-                    FileType::Component(path) => components.push(path),
-                    FileType::Lazy(path) => other.push(path),
-                    FileType::YamlPrototype(path) => yaml_prototypes.push(path),
-                    FileType::Fluent(path) => fluent.push(path),
+            for (id, path) in rx {
+                match files.iter_mut().find(|(gid, _)| *gid == *id) {
+                    Some(f) => f.1.push(path.to_path_buf()),
+                    None => files.push((id.to_owned(), vec![path.to_path_buf()])),
                 }
             }
         });
     });
 
-    CollectedFiles {
-        prototypes,
-        components,
-        other,
-        yaml_prototypes,
-        fluent,
+    files.par_sort_by_key(|(_, files)| files.len());
+    files
+}
+
+struct ParserHandler {
+    id: String,
+    actual_count: u32,
+    total_count: u32,
+    status: Arc<Mutex<ProgressStatus>>,
+    finished: bool,
+}
+
+impl ParserHandler {
+    async fn increment(&mut self) {
+        self.actual_count += 1;
+
+        if self.finished {
+            return;
+        } else {
+            if self.actual_count == self.total_count {
+                self.finished = true;
+                self.status.lock().await.finish(None).await;
+            } else {
+                let percent = percentage(self.actual_count, self.total_count);
+
+                self.status
+                    .lock()
+                    .await
+                    .next_state(
+                        percent,
+                        Some(format!(
+                            "{}/{} ({percent}%)",
+                            self.actual_count, self.total_count
+                        )),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn finish(&mut self) {
+        if self.finished {
+            return;
+        } else {
+            self.finished = true;
+            self.status.lock().await.finish(None).await;
+        }
     }
 }
 
@@ -405,6 +287,7 @@ async fn get_status(client: Arc<Client>, name: &str) -> Arc<Mutex<ProgressStatus
         ProgressStatusInit {
             id: format!("parse-{name}"),
             title: format!("Parsing {name}"),
+            cancellable: true,
             ..Default::default()
         },
     )

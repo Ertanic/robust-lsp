@@ -1,6 +1,6 @@
 use super::{GotoDefinition, GotoDefinitionResult};
 use crate::{
-    backend::{CsharpClasses, FluentLocales, YamlPrototypes},
+    backend::Context,
     parse::{
         common::{DefinitionIndex, Index},
         structs::{
@@ -12,15 +12,14 @@ use crate::{
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
+use std::sync::Arc;
 use stringcase::camel_case;
 use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{self, GotoDefinitionResponse, Location, LocationLink, Position, Url};
 use tree_sitter::{Node, Parser, Point, Tree};
 
 pub struct YamlGotoDefinition {
-    classes: CsharpClasses,
-    prototypes: YamlPrototypes,
-    locales: FluentLocales,
+    context: Arc<Context>,
     position: Position,
     src: String,
     tree: Tree,
@@ -50,13 +49,7 @@ impl GotoDefinition for YamlGotoDefinition {
 }
 
 impl YamlGotoDefinition {
-    pub fn new(
-        classes: CsharpClasses,
-        prototypes: YamlPrototypes,
-        locales: FluentLocales,
-        position: Position,
-        rope: &Rope,
-    ) -> Self {
+    pub fn new(context: Arc<Context>, position: Position, rope: &Rope) -> Self {
         let src = rope.to_string();
 
         let mut parser = Parser::new();
@@ -64,9 +57,7 @@ impl YamlGotoDefinition {
         let tree = parser.parse(&src, None).unwrap();
 
         Self {
-            classes,
-            prototypes,
-            locales,
+            context,
             position,
             src,
             tree,
@@ -109,7 +100,7 @@ impl YamlGotoDefinition {
                     .utf8_text(self.src.as_bytes())
                     .ok()?;
 
-                let reflection = ReflectionManager::new(self.classes.clone());
+                let reflection = ReflectionManager::new(self.context.classes.clone());
                 let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
 
                 let field = block(|| reflection.get_fields(&proto))
@@ -121,7 +112,7 @@ impl YamlGotoDefinition {
                     return None;
                 }
 
-                let lock = block_in_place(|| self.locales.blocking_read());
+                let lock = block_in_place(|| self.context.locales.blocking_read());
                 let locale = lock.get(&FluentKey::dummy(value))?;
 
                 let location = get_location_link(locale.index(), value_node)?;
@@ -135,7 +126,7 @@ impl YamlGotoDefinition {
                     .utf8_text(self.src.as_bytes())
                     .ok()?;
 
-                let reflection = ReflectionManager::new(self.classes.clone());
+                let reflection = ReflectionManager::new(self.context.classes.clone());
                 let comp = block(|| reflection.get_component_by_name(comp_name))?;
 
                 let field = block(|| reflection.get_fields(&comp))
@@ -147,7 +138,7 @@ impl YamlGotoDefinition {
                     return None;
                 }
 
-                let lock = block_in_place(|| self.locales.blocking_read());
+                let lock = block_in_place(|| self.context.locales.blocking_read());
                 let locale = lock.get(&FluentKey::dummy(value))?;
 
                 let location = get_location_link(locale.index(), value_node)?;
@@ -186,7 +177,7 @@ impl YamlGotoDefinition {
                     return None;
                 }
 
-                let comp = block_in_place(|| self.classes.blocking_read())
+                let comp = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Component::try_from(c).ok())
                     .find_any(|p| camel_case(&p.get_component_name()) == camel_case(seeking))?;
@@ -205,12 +196,12 @@ impl YamlGotoDefinition {
                     .utf8_text(self.src.as_bytes())
                     .ok()?;
 
-                let comp = block_in_place(|| self.classes.blocking_read())
+                let comp = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Component::try_from(c).ok())
                     .find_any(|p| camel_case(&p.get_component_name()) == camel_case(comp_name))?;
 
-                let reflection = ReflectionManager::new(self.classes.clone());
+                let reflection = ReflectionManager::new(self.context.classes.clone());
                 let field = block(|| reflection.get_fields(&comp))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
@@ -249,7 +240,7 @@ impl YamlGotoDefinition {
                     return None;
                 }
 
-                let prototype = block_in_place(|| self.classes.blocking_read())
+                let prototype = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Prototype::try_from(c).ok())
                     .find_any(|p| camel_case(&p.get_prototype_name()) == seeking)?;
@@ -273,7 +264,7 @@ impl YamlGotoDefinition {
                     .utf8_text(self.src.as_bytes())
                     .ok()?;
 
-                let lock = block_in_place(|| self.prototypes.blocking_read());
+                let lock = block_in_place(|| self.context.prototypes.blocking_read());
                 let prototype = lock
                     .par_iter()
                     .filter(|p| p.prototype == type_field_value)
@@ -293,12 +284,12 @@ impl YamlGotoDefinition {
                     .utf8_text(self.src.as_bytes())
                     .ok()?;
 
-                let prototype = block_in_place(|| self.classes.blocking_read())
+                let prototype = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
                     .filter_map(|c| Prototype::try_from(c).ok())
                     .find_any(|p| camel_case(&p.get_prototype_name()) == proto_name)?;
 
-                let reflection = ReflectionManager::new(self.classes.clone());
+                let reflection = ReflectionManager::new(self.context.classes.clone());
                 let field = block(|| reflection.get_fields(&prototype))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;

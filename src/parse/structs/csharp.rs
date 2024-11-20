@@ -1,8 +1,9 @@
 #![allow(unused)]
+
+use super::*;
+use crate::backend::CsharpClasses;
 use common::{DefinitionIndex, Index};
 use tree_sitter::Range;
-use crate::parse::CsharpClasses;
-use super::*;
 
 pub struct ReflectionManager {
     classes: CsharpClasses,

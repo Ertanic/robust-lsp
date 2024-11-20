@@ -1,6 +1,6 @@
 use super::{Completion, CompletionResult};
 use crate::{
-    backend::{CsharpClasses, FluentLocales, YamlPrototypes},
+    backend::Context,
     parse::structs::{
         csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
         json::RsiMeta,
@@ -9,7 +9,7 @@ use crate::{
 };
 use rayon::prelude::*;
 use ropey::Rope;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 use stringcase::camel_case;
 use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{
@@ -22,9 +22,7 @@ use tree_sitter::{Node, Parser, Point, Tree};
 const SPRITES_RES_PATH: &str = "Resources/Textures/";
 
 pub struct YamlCompletion {
-    classes: CsharpClasses,
-    prototypes: YamlPrototypes,
-    locales: FluentLocales,
+    context: Arc<Context>,
     position: Position,
     src: String,
     tree: Tree,
@@ -80,14 +78,7 @@ impl Completion for YamlCompletion {
 }
 
 impl YamlCompletion {
-    pub fn new(
-        classes: CsharpClasses,
-        prototypes: YamlPrototypes,
-        locales: FluentLocales,
-        position: Position,
-        src: &Rope,
-        root_path: PathBuf,
-    ) -> Self {
+    pub fn new(context: Arc<Context>, position: Position, src: &Rope, root_path: PathBuf) -> Self {
         let src = src.to_string();
 
         let mut parser = Parser::new();
@@ -95,9 +86,7 @@ impl YamlCompletion {
         let tree = parser.parse(&src, None).unwrap();
 
         Self {
-            classes,
-            prototypes,
-            locales,
+            context,
             position,
             src,
             tree,
@@ -334,7 +323,7 @@ impl YamlCompletion {
         let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
         let mapping_node = node.parent()?;
         let obj_name = self.get_object_name(&mapping_node)?;
-        let reflection = ReflectionManager::new(self.classes.clone());
+        let reflection = ReflectionManager::new(self.context.classes.clone());
 
         match self.get_nesting(&node) {
             2 => self.prototype_field_type_completion(node, reflection, obj_name, key_name),
@@ -647,7 +636,7 @@ impl YamlCompletion {
                 })
                 .collect::<Vec<_>>(),
             "EntProtoId" => {
-                let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+                let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
                 let entity_prototypes = lock.par_iter().filter(|p| p.prototype == "entity");
 
                 let prototypes = match node.child_by_field_name("value") {
@@ -697,7 +686,7 @@ impl YamlCompletion {
                 let prototype = block(|| reflection.get_prototype_by_name(inner))?;
                 let prototype_name = camel_case(&prototype.get_prototype_name());
 
-                let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+                let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
                 let filtered_prototypes = lock.par_iter().filter(|p| p.prototype == prototype_name);
 
                 let map = |l: String| CompletionItem {
@@ -735,7 +724,7 @@ impl YamlCompletion {
                 prototypes
             }
             "LocId" => {
-                let lock = block_in_place(|| self.locales.blocking_read());
+                let lock = block_in_place(|| self.context.locales.blocking_read());
                 let map = |key: String, range: Option<Range>| CompletionItem {
                     label: key.clone(),
                     kind: Some(CompletionItemKind::VALUE),
@@ -844,7 +833,7 @@ impl YamlCompletion {
             _ => return None,
         };
 
-        let lock = tokio::task::block_in_place(|| self.prototypes.blocking_read());
+        let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
         let filtered_prototypes = lock
             .par_iter()
             .filter(|p| p.prototype == proto_name)
@@ -987,7 +976,7 @@ impl YamlCompletion {
 
         let comp_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
-        let reflection = ReflectionManager::new(self.classes.clone());
+        let reflection = ReflectionManager::new(self.context.classes.clone());
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
         let fields = block(|| reflection.get_fields(&comp))
             .into_par_iter()
@@ -1031,7 +1020,7 @@ impl YamlCompletion {
 
         let proto_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
-        let reflection = ReflectionManager::new(self.classes.clone());
+        let reflection = ReflectionManager::new(self.context.classes.clone());
         let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
         let fields = block(|| reflection.get_fields(&proto))
             .into_par_iter()
@@ -1082,7 +1071,7 @@ impl YamlCompletion {
             .child_by_field_name("value")
             .map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
 
-        let lock = tokio::task::block_in_place(|| self.classes.blocking_read());
+        let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
         let completions = lock
             .par_iter()
             .filter_map(|c| Prototype::try_from(c).ok())
@@ -1155,7 +1144,7 @@ impl YamlCompletion {
 
         let value = node.child_by_field_name("value");
 
-        let lock = tokio::task::block_in_place(|| self.classes.blocking_read());
+        let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
         let completions = lock.par_iter().filter_map(|c| Component::try_from(c).ok());
 
         let map = |c: &Component| {

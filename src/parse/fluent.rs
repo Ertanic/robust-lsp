@@ -1,11 +1,35 @@
-use super::{
-    common::{DefinitionIndex, ParseResult},
-    structs::fluent::FluentKey,
-};
+use super::{common::DefinitionIndex, structs::fluent::FluentKey, ParsedFiles, Result};
+use crate::parse::ParseResult;
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
-use std::{collections::HashSet, path::PathBuf};
+use futures::{
+    future::{ready, BoxFuture},
+    FutureExt,
+};
+use rayon::join;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
-pub async fn parse(path: PathBuf) -> ParseResult<Vec<FluentKey>> {
+pub fn dispatch(
+    result: ParseResult,
+    context: Arc<crate::backend::Context>,
+) -> BoxFuture<'static, ()> {
+    let ParseResult::Fluent(keys) = result else {
+        tracing::warn!("Failed to parse Fluent prototypes.");
+        return ready(()).boxed();
+    };
+
+    Box::pin(async move {
+        context.locales.write().await.extend(keys);
+    })
+}
+
+pub(crate) fn parse(
+    path: PathBuf,
+    _parsed_files: ParsedFiles,
+) -> BoxFuture<'static, Result<ParseResult>> {
+    Box::pin(async move { p(path, ParsedFiles::default()).await })
+}
+
+async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let resource = fluent_syntax::parser::parse(content.as_ref()).or(Err(()))?;
 
@@ -39,10 +63,6 @@ pub async fn parse(path: PathBuf) -> ParseResult<Vec<FluentKey>> {
                 })
                 .collect::<HashSet<_>>();
 
-            if msg.id.name.eq("wanted-list-history-table-reason-col") {
-                tracing::trace!("span: {:#?}", msg.id.span);
-            }
-
             let range = span_to_range(&content, &msg.id.span);
             let index = DefinitionIndex(path.clone(), Some(range));
 
@@ -50,7 +70,7 @@ pub async fn parse(path: PathBuf) -> ParseResult<Vec<FluentKey>> {
         })
         .collect();
 
-    Ok(keys)
+    Ok(ParseResult::Fluent(keys))
 }
 
 fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Range {
@@ -61,8 +81,10 @@ fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Ran
         )
         .collect::<Vec<_>>();
 
-    let start_point = get_point(lines.clone(), span.start);
-    let end_point = get_point(lines.clone(), span.end);
+    let (start_point, end_point) = join(
+        || get_point(&lines, span.start),
+        || get_point(&lines, span.end),
+    );
 
     tree_sitter::Range {
         start_byte: span.start,
@@ -72,7 +94,7 @@ fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Ran
     }
 }
 
-fn get_point(lines: Vec<usize>, index: usize) -> tree_sitter::Point {
+fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
     let mut line_range = 0..lines.len();
     while line_range.end - line_range.start > 1 {
         let range_middle = line_range.start + (line_range.end - line_range.start) / 2;

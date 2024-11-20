@@ -4,9 +4,9 @@ use crate::{
     hint::{yaml::YamlInlayHint, InlayHint},
     parse::{
         common::Index,
-        csharp, parse_project,
+        csharp, fluent,
         structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype},
-        yaml,
+        yaml, FileGroup, ParseResult, ProjectParser,
     },
     utils::check_project_compliance,
 };
@@ -37,13 +37,18 @@ pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
 pub(crate) type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
 pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
 
+#[derive(Default)]
+pub(crate) struct Context {
+    pub(crate) parsed_files: ParsedFiles,
+    pub(crate) classes: CsharpClasses,
+    pub(crate) prototypes: YamlPrototypes,
+    pub(crate) locales: FluentLocales,
+}
+
 pub(crate) struct Backend {
     client: Arc<Client>,
     opened_files: RwLock<HashMap<Url, Rope>>,
-    parsed_files: ParsedFiles,
-    classes: CsharpClasses,
-    prototypes: YamlPrototypes,
-    locales: FluentLocales,
+    context: Arc<Context>,
     root_uri: Arc<RwLock<Option<Url>>>,
 }
 
@@ -52,10 +57,7 @@ impl Backend {
         Self {
             client: Arc::new(client),
             opened_files: Default::default(),
-            parsed_files: ParsedFiles::default(),
-            classes: CsharpClasses::default(),
-            prototypes: Default::default(),
-            locales: Default::default(),
+            context: Default::default(),
             root_uri: Default::default(),
         }
     }
@@ -100,15 +102,43 @@ impl LanguageServer for Backend {
         // I'm shocked by this myself O_O
         let uri = self.root_uri.read().await.clone().unwrap().clone();
 
-        parse_project(
-            uri,
-            self.classes.clone(),
-            self.prototypes.clone(),
-            self.parsed_files.clone(),
-            self.locales.clone(),
-            self.client.clone(),
-        )
-        .await;
+        let csharp_parser = Arc::new(csharp::parse);
+        let csharp_dispatcher = Arc::new(csharp::dispatch);
+        let matchers = vec![
+            FileGroup::new(
+                "C# prototypes",
+                "*Prototype.cs",
+                csharp_parser.clone(),
+                csharp_dispatcher.clone(),
+            ),
+            FileGroup::new(
+                "C# components",
+                "*Component.cs",
+                csharp_parser.clone(),
+                csharp_dispatcher.clone(),
+            ),
+            FileGroup::new(
+                "others C# files",
+                "*.cs",
+                csharp_parser.clone(),
+                csharp_dispatcher.clone(),
+            ),
+            FileGroup::new(
+                "fluent files",
+                "*.ftl",
+                Arc::new(fluent::parse),
+                Arc::new(fluent::dispatch),
+            ),
+            FileGroup::new(
+                "yaml files",
+                "**/Prototypes/**/*.{yml,yaml}",
+                Arc::new(yaml::parse),
+                Arc::new(yaml::dispatch),
+            ),
+        ];
+
+        let parser = ProjectParser::new(uri, self.context.clone(), self.client.clone());
+        parser.parse(matchers).await;
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
@@ -181,18 +211,23 @@ impl LanguageServer for Backend {
 
         match ext {
             "cs" => {
-                let classes = csharp::parse(path.clone(), self.parsed_files.clone()).await;
-                match classes {
-                    Ok(classes) => {
-                        let mut lock = self.classes.write().await;
+                let result = csharp::parse(path.clone(), self.context.parsed_files.clone()).await;
+                match result {
+                    Ok(result) => {
+                        let ParseResult::Csharp(parsed_classes) = result else {
+                            tracing::warn!("Failed to parse C# prototypes while saving file.");
+                            return;
+                        };
+
+                        let mut lock = self.context.classes.write().await;
                         let diff = lock
                             .par_iter()
                             .filter(|c| c.index().0 == path)
-                            .filter(|c| !classes.contains(c))
+                            .filter(|c| !parsed_classes.contains(c))
                             .cloned()
                             .collect::<Vec<_>>();
 
-                        for class in classes {
+                        for class in parsed_classes {
                             tracing::info!("New/changed class: {}", class.name);
                             lock.insert(class);
                         }
@@ -208,18 +243,22 @@ impl LanguageServer for Backend {
                 }
             }
             "yml" | "yaml" => {
-                let prototypes = yaml::parse(path.clone(), self.parsed_files.clone()).await;
-                match prototypes {
-                    Ok(prototypes) => {
-                        let mut lock = self.prototypes.write().await;
+                let result = yaml::parse(path.clone(), self.context.parsed_files.clone()).await;
+                match result {
+                    Ok(result) => {
+                        let ParseResult::YamlPrototypes(parsed_prototypes) = result else {
+                            tracing::warn!("Failed to parse YAML prototypes while saving file.");
+                            return;
+                        };
+                        let mut lock = self.context.prototypes.write().await;
                         let diff = lock
                             .par_iter()
                             .filter(|p| p.index().0 == path)
-                            .filter(|p| !prototypes.contains(p))
+                            .filter(|p| !parsed_prototypes.contains(p))
                             .cloned()
                             .collect::<Vec<_>>();
 
-                        for proto in prototypes {
+                        for proto in parsed_prototypes {
                             tracing::info!(
                                 "New/changed prototype: {} with id {}",
                                 proto.prototype,
@@ -263,7 +302,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let completion = YamlCompletion::new(self.classes.clone(), self.prototypes.clone(), self.locales.clone(), params.text_document_position.position, rope, root_path);
+                        let completion = YamlCompletion::new(self.context.clone(), params.text_document_position.position, rope, root_path);
                         Ok(completion.completion())
                     },
                     None => Ok(None)
@@ -293,7 +332,7 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let definition = YamlGotoDefinition::new(self.classes.clone(), self.prototypes.clone(), self.locales.clone(), params.text_document_position_params.position, rope);
+                        let definition = YamlGotoDefinition::new(self.context.clone(), params.text_document_position_params.position, rope);
                         Ok(definition.goto_definition())
                     }
                     None => {
@@ -326,7 +365,8 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let hint = YamlInlayHint::new(self.classes.clone(), params.range, rope);
+                        let hint =
+                            YamlInlayHint::new(self.context.classes.clone(), params.range, rope);
                         Ok(hint.inlay_hint())
                     }
                     None => {

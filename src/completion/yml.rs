@@ -839,16 +839,23 @@ impl YamlCompletion {
             .filter(|p| p.prototype == proto_name)
             .filter(|p| !specified_parents.contains(&p.id.as_str()));
 
-        let map = |id: String, prototype: String, end_position: u32| CompletionItem {
+        let map = |id: String,
+                   prototype: String,
+                   start_position: u32,
+                   end_position: Option<Point>| CompletionItem {
             label: id.clone(),
             kind: Some(CompletionItemKind::CLASS),
             detail: Some(prototype),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: {
-                    let position = Position::new(self.position.line, end_position);
+                    let position = Position::new(self.position.line, start_position);
                     lsp_types::Range {
                         start: position,
-                        end: position,
+                        end: if let Some(end_position) = end_position {
+                            Position::new(end_position.row as u32, end_position.column as u32)
+                        } else {
+                            position
+                        },
                     }
                 },
                 new_text: id,
@@ -896,7 +903,7 @@ impl YamlCompletion {
                 let value = node.utf8_text(self.src.as_bytes()).ok()?;
                 let mut parents = filtered_prototypes
                     .map(|p| (strsim::jaro_winkler(value, &p.id), p))
-                    .filter(|(diff, _)| diff > &0.6)
+                    .filter(|(diff, _)| diff > &0.8)
                     .map(|(diff, p)| {
                         (
                             diff,
@@ -904,6 +911,7 @@ impl YamlCompletion {
                                 p.id.clone(),
                                 p.prototype.clone(),
                                 node.start_position().column as u32,
+                                Some(node.end_position()),
                             ),
                         )
                     })
@@ -921,7 +929,7 @@ impl YamlCompletion {
                     let key_node = node.child_by_field_name("key")?;
                     let mut parents = filtered_prototypes
                         .map(|p| (strsim::jaro_winkler(value, &p.id), p))
-                        .filter(|(diff, _)| diff > &0.6)
+                        .filter(|(diff, _)| diff > &0.8)
                         .map(|(diff, p)| {
                             (
                                 diff,
@@ -929,6 +937,7 @@ impl YamlCompletion {
                                     p.id.clone(),
                                     p.prototype.clone(),
                                     key_node.end_position().column as u32 + 2,
+                                    Some(value_node.end_position()),
                                 ),
                             )
                         })
@@ -948,11 +957,11 @@ impl YamlCompletion {
                                 p.id.clone(),
                                 p.prototype.clone(),
                                 key_node.end_position().column as u32 + 2,
+                                None,
                             )
                         })
                         .collect::<Vec<_>>();
 
-                    parents.sort_by(|a, b| a.label.cmp(&b.label));
                     parents.truncate(100);
 
                     parents
@@ -961,14 +970,10 @@ impl YamlCompletion {
             _ => vec![],
         };
 
-        if !parents.is_empty() {
-            Some(CompletionResponse::List(CompletionList {
-                is_incomplete: true,
-                items: parents,
-            }))
-        } else {
-            None
-        }
+        Some(CompletionResponse::List(CompletionList {
+            is_incomplete: true,
+            items: parents,
+        }))
     }
 
     fn component_fields_completion(&self, node: Node) -> CompletionResult {
@@ -1161,38 +1166,43 @@ impl YamlCompletion {
             }
         };
 
-        let completions = match value {
+        let items = match value {
             Some(value_node) => {
                 let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
-                completions
-                    .filter(|c| {
-                        let name = c.get_component_name().to_lowercase();
-                        let diff =
-                            strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
-                        diff < name.len()
-                    })
-                    .map(|c| {
+                let mut items = completions
+                    .map(|c| (strsim::jaro_winkler(value, &c.get_component_name()), c))
+                    .filter(|(diff, _)| *diff > 0.8)
+                    .map(|(diff, c)| {
                         let item = map(&c);
                         let name = c.get_component_name();
-                        CompletionItem {
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range: {
-                                    let start = Position::new(
-                                        self.position.line,
-                                        key_node.end_position().column as u32 + 2,
-                                    );
-                                    let end = Position::new(
-                                        self.position.line,
-                                        value_node.end_position().column as u32,
-                                    );
-                                    lsp_types::Range { start, end }
-                                },
-                                new_text: name,
-                            })),
-                            ..item
-                        }
+                        (
+                            diff,
+                            CompletionItem {
+                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                    range: {
+                                        let start = Position::new(
+                                            self.position.line,
+                                            key_node.end_position().column as u32 + 2,
+                                        );
+                                        let end = Position::new(
+                                            self.position.line,
+                                            value_node.end_position().column as u32,
+                                        );
+                                        lsp_types::Range { start, end }
+                                    },
+                                    new_text: name,
+                                })),
+                                ..item
+                            },
+                        )
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+
+                items.sort_by_key(|(diff, _)| (*diff * 100.) as u32);
+                items.reverse();
+                items.truncate(100);
+
+                items.into_iter().map(|(_, c)| c).collect()
             }
             None => completions
                 .map(|c| CompletionItem {
@@ -1202,6 +1212,9 @@ impl YamlCompletion {
                 .collect(),
         };
 
-        Some(CompletionResponse::Array(completions))
+        Some(CompletionResponse::List(CompletionList {
+            is_incomplete: true,
+            items,
+        }))
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "robust-lsp"
-version = "0.5.0"
+version = "0.5.2"
 edition = "2021"
 
 [dependencies]
@@ -9,6 +9,7 @@ clap = { version = "4.5.20", features = ["cargo"] }
 fluent-syntax = { git = "https://github.com/Ertanic/fluent-rs", branch = "span", features = [
     "spans",
 ], package = "fluent-syntax" }
+futures = "0.3.31"
 globset = "0.4.15"
 rayon = "1.10.0"
 ropey = "1.6.1"

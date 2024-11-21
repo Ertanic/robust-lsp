@@ -1,10 +1,35 @@
-use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles};
-use crate::parse::common::ParseResult;
+use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles, Result};
+use crate::parse::ParseResult;
+use futures::{
+    future::{ready, BoxFuture},
+    FutureExt,
+};
 use ropey::Rope;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tree_sitter::Node;
 
-pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<YamlPrototype>> {
+pub fn dispatch(
+    result: ParseResult,
+    context: Arc<crate::backend::Context>,
+) -> BoxFuture<'static, ()> {
+    let ParseResult::YamlPrototypes(protos) = result else {
+        tracing::warn!("Failed to parse YAML prototypes.");
+        return ready(()).boxed();
+    };
+
+    Box::pin(async move {
+        context.prototypes.write().await.extend(protos);
+    })
+}
+
+pub(crate) fn parse(
+    path: PathBuf,
+    _parsed_files: ParsedFiles,
+) -> BoxFuture<'static, Result<ParseResult>> {
+    Box::pin(async move { p(path, _parsed_files).await })
+}
+
+async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_yaml::language())
@@ -37,7 +62,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult<Vec<
                     protos.push(prototype);
                 }
             }
-            return Ok(protos);
+            return Ok(ParseResult::YamlPrototypes(protos));
         }
     }
 
@@ -118,7 +143,6 @@ fn get_yaml_prototype(
                 return Some(YamlPrototype::new(
                     prototype,
                     id,
-                    parents,
                     DefinitionIndex(path.clone(), id_range),
                 ))
             }

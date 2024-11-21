@@ -5,14 +5,13 @@ use std::hash::Hash;
 pub struct YamlPrototype {
     pub prototype: String,
     pub id: String,
-    pub parents: Vec<String>,
 
     index: DefinitionIndex,
 }
 
 impl YamlPrototype {
-    pub fn new(prototype: String, id: String, parents: Vec<String>, index: DefinitionIndex) -> Self {
-        Self { prototype, id, parents, index }
+    pub fn new(prototype: String, id: String, index: DefinitionIndex) -> Self {
+        Self { prototype, id, index }
     }
 }
 

@@ -1,11 +1,16 @@
 use super::{
-    common::{DefinitionIndex, ParseFromNode, ParseResult},
+    common::{DefinitionIndex, ParseFromNode},
     structs::csharp::{
         CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
         CsharpAttributeCollection, CsharpClass, CsharpClassField,
     },
+    ParseResult,
 };
 use crate::backend::ParsedFiles;
+use futures::{
+    future::{ready, BoxFuture},
+    FutureExt,
+};
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
@@ -25,10 +30,30 @@ static DATA_FIELD_ATTR_ARGS: &[&str] = &[
 ];
 static ID_DATA_FIELD_ATTR_ARGS: &[&str] = &["priority", "customTypeSerializer"];
 
-pub(crate) async fn parse(
+type Result<T, E = ()> = std::result::Result<T, E>;
+
+pub(crate) fn dispatch(
+    result: ParseResult,
+    context: Arc<crate::backend::Context>,
+) -> BoxFuture<'static, ()> {
+    let ParseResult::Csharp(classes) = result else {
+        tracing::warn!("Failed to parse C# prototypes.");
+        return ready(()).boxed();
+    };
+
+    Box::pin(async move {
+        context.classes.write().await.extend(classes);
+    })
+}
+
+pub(crate) fn parse(
     path: PathBuf,
     parsed_files: ParsedFiles,
-) -> ParseResult<Vec<CsharpClass>> {
+) -> BoxFuture<'static, Result<ParseResult>> {
+    Box::pin(async move { p(path, parsed_files).await })
+}
+
+async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -77,14 +102,14 @@ pub(crate) async fn parse(
                 .collect::<Vec<_>>()
         });
 
-        return Ok(classes);
+        return Ok(ParseResult::Csharp(classes));
     }
 
     Err(())
 }
 
 impl ParseFromNode for CsharpClass {
-    fn get(node: Node, src: Arc<Rope>, path: &Path) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, path: &Path) -> Result<Self> {
         let mut cursor = node.walk();
 
         let mut modifiers = HashSet::new();
@@ -150,7 +175,7 @@ impl ParseFromNode for CsharpClass {
 }
 
 impl ParseFromNode for CsharpClassField {
-    fn get(node: Node, src: Arc<Rope>, path: &Path) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, path: &Path) -> Result<Self> {
         let mut cursor = node.walk();
         let source = src.clone().to_string();
 
@@ -230,7 +255,7 @@ impl ParseFromNode for CsharpClassField {
 }
 
 impl ParseFromNode for Vec<CsharpAttribute> {
-    fn get(node: Node, src: Arc<Rope>, _path: &Path) -> ParseResult<Self> {
+    fn get(node: Node, src: Arc<Rope>, _path: &Path) -> Result<Self> {
         let mut cursor = node.walk();
 
         let mut attributes = vec![];

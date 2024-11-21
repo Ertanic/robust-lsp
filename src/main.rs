@@ -7,9 +7,9 @@ use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 mod backend;
 mod completion;
 mod goto;
+mod hint;
 mod parse;
 mod utils;
-mod hint;
 
 #[tokio::main]
 async fn main() {
@@ -32,8 +32,12 @@ async fn main() {
         .with_writer(io::stderr)
         .with_thread_ids(true);
 
+    let targets = filter::Targets::new().with_target("robust_lsp", filter::LevelFilter::TRACE);
+    #[cfg(debug_assertions)]
+    let targets = targets.with_target("tower_lsp", filter::LevelFilter::TRACE);
+
     tracing_subscriber::registry()
-        .with(filter::Targets::new().with_target("robust_lsp", filter::LevelFilter::TRACE))
+        .with(targets)
         .with(fmt_layer)
         .init();
 

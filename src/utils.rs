@@ -1,15 +1,15 @@
 use std::{future::Future, sync::Arc};
 use tower_lsp::{
     lsp_types::{
-        self, notification::Progress, request::WorkDoneProgressCreate, NumberOrString, Position,
-        ProgressParams, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin,
+        notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString,
+        Position, ProgressParams, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin,
         WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
     },
     Client,
 };
 use tracing::instrument;
 
-pub fn check_project_compliance(params: &lsp_types::InitializeParams) -> bool {
+pub fn check_project_compliance(params: &InitializeParams) -> bool {
     if let Some(root_uri) = params.root_uri.as_ref() {
         let root_path = root_uri.to_file_path().unwrap();
 

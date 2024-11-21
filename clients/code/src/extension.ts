@@ -24,6 +24,7 @@ export async function activate(context: ExtensionContext) {
 		const url = info?.assets.find(a => a.name === robust_name)?.browser_download_url;
 
 		if (!url) {
+			await window.showInformationMessage(`Cannot find suitable version of robust-lsp for your platform ${process.platform} with arch ${process.arch}. You can check out extension Github and create issue if it's a bug`);
 			deactivate();
 			return;
 		}
@@ -144,7 +145,7 @@ function f(s: string, init?: RequestInit): Promise<Response> {
 }
 
 function getExecutableFilename(): string {
-	return `robust-lsp${process.platform === 'win32' ? '.exe' : ''}`;
+	return `robust-lsp-${process.platform === 'win32' ? 'win-x86_64.exe' : 'linux-x86_64'}`;
 }
 
 interface GitHubReleasesAPIResponse {

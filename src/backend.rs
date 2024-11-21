@@ -143,34 +143,35 @@ impl LanguageServer for Backend {
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        if let Ok(path) = params.text_document.uri.to_file_path() {
-            if path.exists() {
-                if let Ok(handler) = std::fs::File::open(&path) {
-                    let rope = Rope::from_reader(handler).unwrap();
-                    self.opened_files
-                        .write()
-                        .await
-                        .insert(params.text_document.uri, rope);
-                    tracing::trace!("Document has been cached.");
-                } else {
-                    tracing::trace!("File can't be opened.");
-                }
-            } else {
-                tracing::trace!("File don't exists.");
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            return;
+        };
+
+        if !path.is_file() {
+            return;
+        }
+
+        match std::fs::File::open(&path) {
+            Ok(handler) => {
+                let rope = Rope::from_reader(handler).unwrap();
+                self.opened_files
+                    .write()
+                    .await
+                    .insert(params.text_document.uri, rope);
+                tracing::trace!("Document has been cached.");
             }
-        } else {
-            tracing::trace!("Document is not a file.");
+            Err(err) => {
+                tracing::trace!("File can't be opened: {}", err);
+            }
         }
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        match self
-            .opened_files
-            .write()
-            .await
-            .get_mut(&params.text_document.uri)
-        {
+        let mut lock = self.opened_files.write().await;
+        let found_rope = lock.get_mut(&params.text_document.uri);
+
+        match found_rope {
             Some(rope) => {
                 for change in params.content_changes {
                     if let Some(range) = change.range {
@@ -179,10 +180,14 @@ impl LanguageServer for Backend {
                         let end_idx = rope.line_to_char(range.end.line as usize)
                             + range.end.character as usize;
 
-                        rope.remove(start_idx..end_idx);
-                        rope.insert(start_idx, &change.text);
+                        if let Err(err) = rope.try_remove(start_idx..end_idx) {
+                            tracing::warn!("Failed to remove text from document: {}.", err);
+                        };
+                        if let Err(err) = rope.try_insert(start_idx, &change.text) {
+                            tracing::warn!("Failed to insert text into document: {}.", err);
+                        }
 
-                        tracing::trace!("Document has been changed. New changes: {}", change.text);
+                        tracing::trace!("Document has been changed.");
                     }
                 }
             }

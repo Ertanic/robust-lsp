@@ -21,7 +21,7 @@ export async function activate(context: ExtensionContext) {
 		}
 
 		info = await getLatestReleaseInfo();
-		const url = info?.assets.find(a => a.name === robust_name)?.browser_download_url;
+		const url = getReleaseUrl(info!);
 
 		if (!url) {
 			deactivate();
@@ -55,7 +55,7 @@ export async function activate(context: ExtensionContext) {
 		const newer = await curr_ver.isNewer(latest_ver);
 
 		console.log(`Latest version (${info?.tag_name}) newer current version (${stdout})?: ${newer}`);
-		
+
 		if (curr_ver.isNewer(latest_ver)) {
 			const selection = await window.showInformationMessage(`Current version of robust-lsp: “${stdout}”, newer version found: “${info?.tag_name}”.`, 'Update', 'Cancel');
 
@@ -65,7 +65,7 @@ export async function activate(context: ExtensionContext) {
 			}
 
 			if (selection === 'Update') {
-				const uri = info?.assets.find(a => a.name === robust_name)?.browser_download_url;
+				const uri = getReleaseUrl(info!);
 				if (!uri) {
 					deactivate();
 					return;
@@ -111,6 +111,16 @@ export function deactivate() {
 	}
 	console.log('An extension "robust-lsp" is now inactive!');
 	return client.stop();
+}
+
+function getReleaseUrl(info: GitHubReleasesAPIResponse): string | undefined {
+	const platform = process.platform === 'win32' ? 'win' : process.platform;
+	const arch = process.arch === 'x64' ? 'x86_64' : process.arch;
+
+	return info.assets.find(link => {
+		const parts = link.name.split('-').map(part => part.replace('.exe', ''));
+		return parts.includes(platform) && parts.includes(arch);
+	})?.browser_download_url
 }
 
 async function getLatestReleaseInfo(): Promise<GitHubReleasesAPIResponse | undefined> {

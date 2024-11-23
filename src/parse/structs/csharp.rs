@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::backend::CsharpClasses;
-use common::{DefinitionIndex, Index};
+use index::{DefinitionIndex, Index};
 use tree_sitter::Range;
 
 pub struct ReflectionManager {

@@ -3,7 +3,7 @@ use crate::{
     goto::{yml::YamlGotoDefinition, GotoDefinition},
     hint::{yaml::YamlInlayHint, InlayHint},
     parse::{
-        common::Index,
+        index::Index,
         csharp, fluent,
         structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype},
         yaml, FileGroup, ParseResult, ProjectParser,
@@ -216,7 +216,7 @@ impl LanguageServer for Backend {
 
         match ext {
             "cs" => {
-                let result = csharp::parse(path.clone(), self.context.parsed_files.clone()).await;
+                let result = csharp::parse(path.clone(), self.context.parsed_files.clone(), self.client.clone()).await;
                 match result {
                     Ok(result) => {
                         let ParseResult::Csharp(parsed_classes) = result else {
@@ -248,7 +248,7 @@ impl LanguageServer for Backend {
                 }
             }
             "yml" | "yaml" => {
-                let result = yaml::parse(path.clone(), self.context.parsed_files.clone()).await;
+                let result = yaml::parse(path.clone(), self.context.parsed_files.clone(), self.client.clone()).await;
                 match result {
                     Ok(result) => {
                         let ParseResult::YamlPrototypes(parsed_prototypes) = result else {

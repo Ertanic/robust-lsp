@@ -2,7 +2,7 @@ use super::{GotoDefinition, GotoDefinitionResult};
 use crate::{
     backend::Context,
     parse::{
-        common::{DefinitionIndex, Index},
+        index::{DefinitionIndex, Index, IndexRange},
         structs::{
             csharp::{Component, Prototype, ReflectionManager},
             fluent::FluentKey,
@@ -15,7 +15,7 @@ use ropey::Rope;
 use std::sync::Arc;
 use stringcase::camel_case;
 use tokio::task::block_in_place;
-use tower_lsp::lsp_types::{self, GotoDefinitionResponse, Location, LocationLink, Position, Url};
+use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, LocationLink, Position, Url};
 use tree_sitter::{Node, Parser, Point, Tree};
 
 pub struct YamlGotoDefinition {
@@ -302,20 +302,9 @@ impl YamlGotoDefinition {
 
     fn index_to_definition(&self, index: &DefinitionIndex) -> GotoDefinitionResult {
         let url = Url::from_file_path(index.0.clone()).ok()?;
-        let (start_position, end_position) = {
-            let range = index.1?;
-            (
-                Position::new(
-                    range.start_point.row as u32,
-                    range.start_point.column as u32,
-                ),
-                Position::new(range.end_point.row as u32, range.end_point.column as u32),
-            )
-        };
-        let range = lsp_types::Range::new(start_position, end_position);
         let definition = GotoDefinitionResponse::Scalar(Location {
             uri: url,
-            range: range,
+            range: index.1.into(),
         });
 
         Some(definition)
@@ -355,29 +344,9 @@ impl YamlGotoDefinition {
 }
 
 fn get_location_link(index: &DefinitionIndex, node: Node) -> Option<LocationLink> {
-    let DefinitionIndex(path, Some(locale_range)) = index else {
-        return None;
-    };
-    let url_range = lsp_types::Range {
-        start: Position {
-            line: node.start_position().row as u32,
-            character: node.start_position().column as u32,
-        },
-        end: Position {
-            line: node.end_position().row as u32,
-            character: node.end_position().column as u32,
-        },
-    };
-    let selection_range = lsp_types::Range {
-        start: Position {
-            line: locale_range.start_point.row as u32,
-            character: locale_range.start_point.column as u32,
-        },
-        end: Position {
-            line: locale_range.end_point.row as u32,
-            character: locale_range.end_point.column as u32,
-        },
-    };
+    let DefinitionIndex(path, locale_range) = index;
+    let selection_range = locale_range.clone().into();
+    let url_range = IndexRange::from(node.range()).into();
 
     Some(LocationLink {
         origin_selection_range: Some(url_range),

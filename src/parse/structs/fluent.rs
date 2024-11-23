@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::parse::common::{DefinitionIndex, Index};
+use crate::parse::index::{DefinitionIndex, Index};
 
 #[derive(Debug, Clone, Default)]
 pub struct FluentKey {

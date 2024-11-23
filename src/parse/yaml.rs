@@ -1,4 +1,4 @@
-use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles, Result};
+use super::{index::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles, Result};
 use crate::parse::ParseResult;
 use futures::{
     future::{ready, BoxFuture},
@@ -6,6 +6,7 @@ use futures::{
 };
 use ropey::Rope;
 use std::{path::PathBuf, sync::Arc};
+use tower_lsp::Client;
 use tree_sitter::Node;
 
 pub fn dispatch(
@@ -25,11 +26,12 @@ pub fn dispatch(
 pub(crate) fn parse(
     path: PathBuf,
     _parsed_files: ParsedFiles,
+    _client: Arc<Client>,
 ) -> BoxFuture<'static, Result<ParseResult>> {
-    Box::pin(async move { p(path, _parsed_files).await })
+    Box::pin(async move { p(path, _parsed_files, _client).await })
 }
 
-async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
+async fn p(path: PathBuf, parsed_files: ParsedFiles, client: Arc<Client>) -> Result<ParseResult> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_yaml::language())
@@ -100,7 +102,7 @@ fn get_yaml_prototype(
                 }
                 "id" => {
                     id = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned());
-                    id_range = Some(value_node.range());
+                    id_range = Some(value_node.range().into());
                 }
                 "parent" => match value_node.kind() {
                     "block_node" | "flow_node" => {
@@ -143,7 +145,7 @@ fn get_yaml_prototype(
                 return Some(YamlPrototype::new(
                     prototype,
                     id,
-                    DefinitionIndex(path.clone(), id_range),
+                    DefinitionIndex(path.clone(), id_range.unwrap_or_default()),
                 ))
             }
             _ => return None,

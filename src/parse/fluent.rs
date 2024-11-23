@@ -86,15 +86,10 @@ fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Ran
         || get_point(&lines, span.end),
     );
 
-    tree_sitter::Range {
-        start_byte: span.start,
-        end_byte: span.end,
-        start_point,
-        end_point,
-    }
+    IndexRange(start_point, end_point, Some((span.start, span.end)))
 }
 
-fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
+fn get_point(lines: &Vec<usize>, index: usize) -> IndexPosition {
     let mut line_range = 0..lines.len();
     while line_range.end - line_range.start > 1 {
         let range_middle = line_range.start + (line_range.end - line_range.start) / 2;
@@ -110,8 +105,5 @@ fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
     let line = line_range.start + 1;
     let col = index - line_start_index + 1;
 
-    tree_sitter::Point {
-        row: line - 1,
-        column: col - 1,
-    }
+    IndexPosition(line - 1, col - 1)
 }

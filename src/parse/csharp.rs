@@ -1,5 +1,5 @@
 use super::{
-    common::{DefinitionIndex, ParseFromNode},
+    index::{DefinitionIndex, ParseFromNode},
     structs::csharp::{
         CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
         CsharpAttributeCollection, CsharpClass, CsharpClassField,
@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tower_lsp::Client;
 use tree_sitter::Node;
 
 static PROTOTYPE_ATTR_ARGS: &[&str] = &["type", "loadPriority"];
@@ -49,11 +50,12 @@ pub(crate) fn dispatch(
 pub(crate) fn parse(
     path: PathBuf,
     parsed_files: ParsedFiles,
+    client: Arc<Client>,
 ) -> BoxFuture<'static, Result<ParseResult>> {
-    Box::pin(async move { p(path, parsed_files).await })
+    Box::pin(async move { p(path, parsed_files, client).await })
 }
 
-async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
+async fn p(path: PathBuf, parsed_files: ParsedFiles, client: Arc<Client>) -> Result<ParseResult> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -129,7 +131,7 @@ impl ParseFromNode for CsharpClass {
                 "identifier" => {
                     let indent = node.utf8_text(source.as_bytes()).unwrap().to_owned();
                     name = Some(indent);
-                    name_range = Some(node.range());
+                    name_range = Some(node.range().into());
                 }
                 "base_list" => {
                     let mut cursor = node.walk();
@@ -167,7 +169,7 @@ impl ParseFromNode for CsharpClass {
                 attributes,
                 fields,
                 modifiers,
-                DefinitionIndex(path.to_path_buf(), name_range),
+                DefinitionIndex(path.to_path_buf(), name_range.unwrap_or_default()),
             )),
             _ => Err(()),
         }
@@ -206,7 +208,7 @@ impl ParseFromNode for CsharpClassField {
                                     field_name = Some(
                                         name_node.utf8_text(source.as_bytes()).unwrap().to_owned(),
                                     );
-                                    name_range = Some(name_node.range());
+                                    name_range = Some(name_node.range().into());
                                 }
                             }
                         }
@@ -221,7 +223,7 @@ impl ParseFromNode for CsharpClassField {
             ) {
                 (Some(type_node), Some(name_node)) => {
                     field_name = Some(name_node.utf8_text(source.as_bytes()).unwrap().to_owned());
-                    name_range = Some(name_node.range());
+                    name_range = Some(name_node.range().into());
                     type_name = Some(type_node.utf8_text(source.as_bytes()).unwrap().to_owned());
                 }
                 _ => return Err(()),
@@ -247,7 +249,7 @@ impl ParseFromNode for CsharpClassField {
                 type_name,
                 attributes,
                 modifiers,
-                DefinitionIndex(path.to_path_buf(), name_range),
+                DefinitionIndex(path.to_path_buf(), name_range.unwrap_or_default()),
             )),
             _ => Err(()),
         }

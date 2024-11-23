@@ -1,4 +1,4 @@
-use crate::parse::common::{DefinitionIndex, Index};
+use crate::parse::index::{DefinitionIndex, Index};
 use std::hash::Hash;
 
 #[derive(Debug, Clone, Default)]

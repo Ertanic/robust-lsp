@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tower_lsp::{lsp_types::Url, Client};
 use tracing::instrument;
 
-pub mod common;
+pub mod index;
 pub mod csharp;
 pub mod fluent;
 pub mod structs;
@@ -23,7 +23,7 @@ pub mod yaml;
 
 pub(crate) type Result<T, E = ()> = std::result::Result<T, E>;
 #[rustfmt::skip]
-pub(crate) type Parser = Arc<dyn (Fn(PathBuf, ParsedFiles) -> BoxFuture<'static, Result<ParseResult>>) + Send + Sync>;
+pub(crate) type Parser = Arc<dyn (Fn(PathBuf, ParsedFiles, Arc<Client>) -> BoxFuture<'static, Result<ParseResult>>) + Send + Sync>;
 #[rustfmt::skip]
 pub(crate) type ResultDispatcher = Arc<dyn (Fn(ParseResult, Arc<Context>) -> BoxFuture<'static, ()>) + Send + Sync>;
 
@@ -132,13 +132,14 @@ impl ProjectParser {
                     files.into_iter().map(move |f| {
                         let tx = tx.clone();
                         let context = self.context.clone();
+                        let client = self.client.clone();
                         let matchers = matchers.clone();
                         let id = id.clone();
 
                         tokio::spawn(async move {
                             let matcher = matchers.iter().find(|m| m.id == id).unwrap();
                             let parser = matcher.parser.clone();
-                            let result = parser(f, context.parsed_files.clone()).await;
+                            let result = parser(f, context.parsed_files.clone(), client).await;
 
                             if let Err(err) = tx.send((matcher.id.clone(), result)).await {
                                 tracing::error!("Failed to send result: {}", err);

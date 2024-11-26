@@ -1,12 +1,24 @@
-use super::{common::DefinitionIndex, structs::fluent::FluentKey, ParsedFiles, Result};
+use super::{
+    index::{DefinitionIndex, IndexPosition, IndexRange},
+    structs::fluent::FluentKey,
+    ParsedFiles, Result,
+};
 use crate::parse::ParseResult;
-use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
+use core::str;
+use fluent_syntax::{
+    ast::{Entry, Expression, InlineExpression, PatternElement, Span},
+    parser::ParserError,
+};
 use futures::{
     future::{ready, BoxFuture},
     FutureExt,
 };
 use rayon::join;
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use tower_lsp::{
+    lsp_types::{self, CodeDescription, Diagnostic, DiagnosticSeverity, Url},
+    Client,
+};
 
 pub fn dispatch(
     result: ParseResult,
@@ -25,13 +37,27 @@ pub fn dispatch(
 pub(crate) fn parse(
     path: PathBuf,
     _parsed_files: ParsedFiles,
+    _client: Arc<Client>,
 ) -> BoxFuture<'static, Result<ParseResult>> {
-    Box::pin(async move { p(path, ParsedFiles::default()).await })
+    Box::pin(async move { p(path, ParsedFiles::default(), _client).await })
 }
 
-async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
+async fn p(path: PathBuf, _parsed_files: ParsedFiles, client: Arc<Client>) -> Result<ParseResult> {
     let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let resource = fluent_syntax::parser::parse(content.as_ref()).or(Err(()))?;
+
+    // Since the parser works with the string as a byte array,
+    // it reads the Unicode BOM as an invalid beginning of the expression, i.e. as a syntax error
+    let normalized_content = content
+        .trim()
+        .trim_start_matches(str::from_utf8(&[239u8, 187u8, 191u8]).unwrap());
+
+    let resource = match fluent_syntax::parser::parse(normalized_content) {
+        Ok(resource) => resource,
+        Err((resource, errors)) => {
+            report_errors(client, &normalized_content, errors, &path).await;
+            resource
+        }
+    };
 
     let keys = resource
         .body
@@ -63,17 +89,17 @@ async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
                 })
                 .collect::<HashSet<_>>();
 
-            let range = span_to_range(&content, &msg.id.span);
-            let index = DefinitionIndex(path.clone(), Some(range));
+            let range = span_to_range(&normalized_content, &msg.id.span);
+            let index = DefinitionIndex(path.clone(), range);
 
             FluentKey::new(msg.id.name.to_string(), args, index)
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     Ok(ParseResult::Fluent(keys))
 }
 
-fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Range {
+fn span_to_range(src: &str, span: &Span) -> IndexRange {
     let lines = std::iter::once(0)
         .chain(
             src.char_indices()
@@ -106,4 +132,35 @@ fn get_point(lines: &Vec<usize>, index: usize) -> IndexPosition {
     let col = index - line_start_index + 1;
 
     IndexPosition(line - 1, col - 1)
+}
+
+async fn report_errors(
+    client: Arc<Client>,
+    src: &str,
+    errors: Vec<ParserError>,
+    path: &std::path::Path,
+) {
+    let uri = Url::from_file_path(path).expect("Unable to parse the path in uri.");
+    let diagnostics = errors
+        .into_iter()
+        .map(|error| {
+            let range = error.slice.unwrap_or(error.pos.clone());
+            Diagnostic {
+                severity: Some(DiagnosticSeverity::ERROR),
+                code: Some(lsp_types::NumberOrString::String(
+                    "syntax-error".to_string(),
+                )),
+                code_description: Some(CodeDescription {
+                    href: Url::parse("https://projectfluent.org/fluent/guide/")
+                        .expect("Unable to parse url."),
+                }),
+                message: error.kind.to_string(),
+                range: span_to_range(src, &Span::new(range)).into(),
+                source: Some(env!("CARGO_BIN_NAME").to_owned()),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    client.publish_diagnostics(uri, diagnostics, None).await;
 }

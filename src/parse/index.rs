@@ -1,10 +1,10 @@
 use super::Result;
 use ropey::Rope;
-use tower_lsp::lsp_types;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tower_lsp::lsp_types;
 use tree_sitter::Node;
 
 // Row/column
@@ -42,7 +42,11 @@ impl From<lsp_types::Position> for IndexPosition {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct IndexRange(pub IndexPosition, pub IndexPosition, pub Option<(usize, usize)>);
+pub struct IndexRange(
+    pub IndexPosition,
+    pub IndexPosition,
+    pub Option<(usize, usize)>,
+);
 
 impl Into<lsp_types::Range> for IndexRange {
     fn into(self) -> lsp_types::Range {
@@ -83,6 +87,15 @@ impl From<lsp_types::Range> for IndexRange {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DefinitionIndex(pub PathBuf, pub IndexRange);
+
+impl Into<lsp_types::Location> for DefinitionIndex {
+    fn into(self) -> lsp_types::Location {
+        lsp_types::Location {
+            uri: lsp_types::Url::from_file_path(self.0).expect("Unable to parse the path in uri."),
+            range: self.1.into(),
+        }
+    }
+}
 
 pub trait Index {
     fn index(&self) -> &DefinitionIndex;

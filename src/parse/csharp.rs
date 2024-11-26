@@ -55,7 +55,7 @@ pub(crate) fn parse(
     Box::pin(async move { p(path, parsed_files, client).await })
 }
 
-async fn p(path: PathBuf, parsed_files: ParsedFiles, client: Arc<Client>) -> Result<ParseResult> {
+async fn p(path: PathBuf, parsed_files: ParsedFiles, _client: Arc<Client>) -> Result<ParseResult> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())

@@ -1,0 +1,33 @@
+name: Publish
+on:
+    workflow_dispatch:
+jobs:
+    publish-vscode-ext:
+        strategy:
+              matrix:
+                  os: [ubuntu-latest, windows-latest]
+                  include:
+                    - os: ubuntu-latest
+                      file: robust-lsp-linux-x86_64
+                    - os: windows-latest
+                      file: robust-lsp-win-x86_64.exe
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                node-version: 20
+            - run: npm ci
+
+            - name: Check if there are changes
+              id: changes
+              uses: khrist14n/has-path-changes-action
+              with:
+                path: clients/code
+
+            - name: Publish to Visual Studio Marketplace
+              if: steps.changes.outputs.changed == 1
+              uses: HaaLeo/publish-vscode-extension@v2
+              with:
+                pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+                registryUrl: https://marketplace.visualstudio.com

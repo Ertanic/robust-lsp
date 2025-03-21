@@ -4,9 +4,6 @@ on:
 jobs:
     publish-vscode-ext:
         runs-on: ubuntu-latest
-        defaults:
-            run:
-                working-directory: ./clients/code
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
@@ -19,3 +16,4 @@ jobs:
               with:
                 pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
                 registryUrl: https://marketplace.visualstudio.com
+                packagePath: ./clients/code

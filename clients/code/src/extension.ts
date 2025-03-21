@@ -34,7 +34,7 @@ export async function activate(context: ExtensionContext) {
 		window.showInformationMessage('robust-lsp has been installed.');
 	}
 
-	await exec(`${lsp_path.fsPath} --version`, async (err, stdout, stderr) => {
+	exec(`${lsp_path.fsPath} --version`, async (err, stdout, stderr) => {
 		if (err) {
 			console.error(err);
 			return;
@@ -190,10 +190,16 @@ class Version {
 	patch: number;
 
 	constructor(ver: string) {
-		const [major, minor, patch] = (ver.startsWith('v') ? ver.substring(1) : ver).split('.');
-		this.major = parseInt(major, 10);
-		this.minor = parseInt(minor, 10);
-		this.patch = parseInt(patch, 10);
+		if (!ver) {
+			this.major = 0;
+			this.minor = 0;
+			this.patch = 0;
+		} else {
+			const [major, minor, patch] = (ver.startsWith('v') ? ver.substring(1) : ver).split('.');
+			this.major = parseInt(major, 10);
+			this.minor = parseInt(minor, 10);
+			this.patch = parseInt(patch, 10);
+		}
 	}
 
 	isNewer(ver: Version): boolean {

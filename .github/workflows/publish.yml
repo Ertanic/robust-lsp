@@ -3,15 +3,10 @@ on:
     workflow_dispatch:
 jobs:
     publish-vscode-ext:
-        strategy:
-              matrix:
-                  os: [ubuntu-latest, windows-latest]
-                  include:
-                    - os: ubuntu-latest
-                      file: robust-lsp-linux-x86_64
-                    - os: windows-latest
-                      file: robust-lsp-win-x86_64.exe
-        runs-on: ${{ matrix.os }}
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./clients/code
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4

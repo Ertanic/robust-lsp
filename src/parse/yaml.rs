@@ -1,39 +1,14 @@
-use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles, Result};
+use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles};
 use crate::parse::ParseResult;
-use futures::{
-    future::{ready, BoxFuture},
-    FutureExt,
-};
 use ropey::Rope;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf};
 use tree_sitter::Node;
 
-pub fn dispatch(
-    result: ParseResult,
-    context: Arc<crate::backend::Context>,
-) -> BoxFuture<'static, ()> {
-    let ParseResult::YamlPrototypes(protos) = result else {
-        tracing::warn!("Failed to parse YAML prototypes.");
-        return ready(()).boxed();
-    };
-
-    Box::pin(async move {
-        context.prototypes.write().await.extend(protos);
-    })
-}
-
-pub(crate) fn parse(
-    path: PathBuf,
-    _parsed_files: ParsedFiles,
-) -> BoxFuture<'static, Result<ParseResult>> {
-    Box::pin(async move { p(path, _parsed_files).await })
-}
-
-async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
+pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_yaml::language())
-        .expect("Failed to load YAML grammer");
+        .expect("Failed to load YAML grammar");
 
     let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
 
@@ -52,7 +27,7 @@ async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
         let root_node = tree.root_node();
         if let Some(block_sequence_node) = get_block_sequence_node(&root_node) {
             if block_sequence_node.kind() != "block_sequence" {
-                return Err(());
+                return ParseResult::None;
             }
 
             let mut protos = vec![];
@@ -62,11 +37,11 @@ async fn p(path: PathBuf, parsed_files: ParsedFiles) -> Result<ParseResult> {
                     protos.push(prototype);
                 }
             }
-            return Ok(ParseResult::YamlPrototypes(protos));
+            return ParseResult::YamlPrototypes(protos);
         }
     }
 
-    Err(())
+    ParseResult::None
 }
 
 fn get_yaml_prototype(

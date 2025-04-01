@@ -1,37 +1,12 @@
-use super::{common::DefinitionIndex, structs::fluent::FluentKey, ParsedFiles, Result};
+use super::{common::DefinitionIndex, structs::fluent::FluentKey, ParsedFiles};
 use crate::parse::ParseResult;
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
-use futures::{
-    future::{ready, BoxFuture},
-    FutureExt,
-};
 use rayon::join;
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::PathBuf};
 
-pub fn dispatch(
-    result: ParseResult,
-    context: Arc<crate::backend::Context>,
-) -> BoxFuture<'static, ()> {
-    let ParseResult::Fluent(keys) = result else {
-        tracing::warn!("Failed to parse Fluent prototypes.");
-        return ready(()).boxed();
-    };
-
-    Box::pin(async move {
-        context.locales.write().await.extend(keys);
-    })
-}
-
-pub(crate) fn parse(
-    path: PathBuf,
-    _parsed_files: ParsedFiles,
-) -> BoxFuture<'static, Result<ParseResult>> {
-    Box::pin(async move { p(path, ParsedFiles::default()).await })
-}
-
-async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
+pub async fn parse(path: PathBuf, _parsed_files: ParsedFiles) -> ParseResult {
     let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let resource = fluent_syntax::parser::parse(content.as_ref()).or(Err(()))?;
+    let Ok(resource) = fluent_syntax::parser::parse(content.as_ref()) else { return ParseResult::None };
 
     let keys = resource
         .body
@@ -61,7 +36,7 @@ async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
                     } => Some(id.name.to_owned()),
                     _ => None,
                 })
-                .collect::<HashSet<_>>();
+                .collect::<HashSet<String>>();
 
             let range = span_to_range(&content, &msg.id.span);
             let index = DefinitionIndex(path.clone(), Some(range));
@@ -70,7 +45,7 @@ async fn p(path: PathBuf, _parsed_files: ParsedFiles) -> Result<ParseResult> {
         })
         .collect();
 
-    Ok(ParseResult::Fluent(keys))
+    ParseResult::Fluent(keys)
 }
 
 fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Range {

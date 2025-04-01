@@ -14,7 +14,7 @@ impl ReflectionManager {
         Self { classes }
     }
 
-    pub async fn get_fields(&self, class: &CsharpClass) -> Vec<CsharpClassField> {
+    pub async fn get_fields(&self, class: &CsharpObject) -> Vec<CsharpClassField> {
         let lock = self.classes.read().await;
         let bases = class
             .base
@@ -136,7 +136,7 @@ impl Extend<CsharpAttribute> for CsharpAttributeCollection {
 }
 
 pub struct Component {
-    class: CsharpClass,
+    class: CsharpObject,
 }
 
 impl Component {
@@ -151,10 +151,10 @@ impl Component {
     }
 }
 
-impl TryFrom<&CsharpClass> for Component {
+impl TryFrom<&CsharpObject> for Component {
     type Error = ();
 
-    fn try_from(class: &CsharpClass) -> Result<Self, Self::Error> {
+    fn try_from(class: &CsharpObject) -> Result<Self, Self::Error> {
         if class.attributes.contains("RegisterComponent")
             && class.base.contains(&"Component".to_owned())
             || class.base.contains(&"IComponent".to_owned())
@@ -169,7 +169,7 @@ impl TryFrom<&CsharpClass> for Component {
 }
 
 impl Deref for Component {
-    type Target = CsharpClass;
+    type Target = CsharpObject;
 
     fn deref(&self) -> &Self::Target {
         &self.class
@@ -178,7 +178,7 @@ impl Deref for Component {
 
 #[derive(Debug)]
 pub struct Prototype {
-    class: CsharpClass,
+    class: CsharpObject,
 }
 
 impl Prototype {
@@ -207,9 +207,9 @@ impl Prototype {
     }
 }
 
-impl TryFrom<&CsharpClass> for Prototype {
+impl TryFrom<&CsharpObject> for Prototype {
     type Error = ();
-    fn try_from(class: &CsharpClass) -> Result<Self, Self::Error> {
+    fn try_from(class: &CsharpObject) -> Result<Self, Self::Error> {
         if class.base.contains(&"IPrototype".into()) && class.attributes.contains("Prototype") {
             Ok(Self {
                 class: class.clone(),
@@ -221,7 +221,7 @@ impl TryFrom<&CsharpClass> for Prototype {
 }
 
 impl Deref for Prototype {
-    type Target = CsharpClass;
+    type Target = CsharpObject;
 
     fn deref(&self) -> &Self::Target {
         &self.class
@@ -229,7 +229,7 @@ impl Deref for Prototype {
 }
 
 #[derive(Default, Clone, Debug)]
-pub struct CsharpClass {
+pub struct CsharpObject {
     pub name: String,
     pub base: Vec<String>,
     pub attributes: CsharpAttributeCollection,
@@ -239,7 +239,7 @@ pub struct CsharpClass {
     index: DefinitionIndex,
 }
 
-impl CsharpClass {
+impl CsharpObject {
     pub fn new(
         name: String,
         base: Vec<String>,
@@ -263,7 +263,7 @@ impl CsharpClass {
     }
 }
 
-impl From<&str> for CsharpClass {
+impl From<&str> for CsharpObject {
     fn from(value: &str) -> Self {
         Self {
             name: value.to_string(),
@@ -272,21 +272,21 @@ impl From<&str> for CsharpClass {
     }
 }
 
-impl PartialEq for CsharpClass {
+impl PartialEq for CsharpObject {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
     }
 }
 
-impl Eq for CsharpClass {}
+impl Eq for CsharpObject {}
 
-impl Hash for CsharpClass {
+impl Hash for CsharpObject {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
     }
 }
 
-impl Index for CsharpClass {
+impl Index for CsharpObject {
     fn index(&self) -> &DefinitionIndex {
         &self.index
     }

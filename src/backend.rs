@@ -4,9 +4,9 @@ use crate::{
     hint::{yaml::YamlInlayHint, InlayHint},
     parse::{
         common::Index,
-        csharp, fluent,
-        structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype},
-        yaml, FileGroup, ParseResult, ProjectParser,
+        csharp,
+        structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype},
+        yaml, ParseResult, ProjectParser,
     },
     utils::check_project_compliance,
 };
@@ -17,7 +17,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
@@ -32,24 +32,24 @@ use tower_lsp::{
 use tracing::instrument;
 use tree_sitter::Tree;
 
-pub(crate) type FluentLocales = Arc<RwLock<HashSet<FluentKey>>>;
-pub(crate) type CsharpClasses = Arc<RwLock<HashSet<CsharpClass>>>;
-pub(crate) type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
-pub(crate) type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
+pub type FluentLocales = Arc<RwLock<HashSet<FluentKey>>>;
+pub type CsharpClasses = Arc<RwLock<HashSet<CsharpObject>>>;
+pub type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
+pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
 
 #[derive(Default)]
-pub(crate) struct Context {
-    pub(crate) parsed_files: ParsedFiles,
-    pub(crate) classes: CsharpClasses,
-    pub(crate) prototypes: YamlPrototypes,
-    pub(crate) locales: FluentLocales,
+pub struct Context {
+    pub parsed_files: ParsedFiles,
+    pub classes: CsharpClasses,
+    pub prototypes: YamlPrototypes,
+    pub locales: FluentLocales,
 }
 
 pub(crate) struct Backend {
     client: Arc<Client>,
     opened_files: RwLock<HashMap<Url, Rope>>,
     context: Arc<Context>,
-    root_uri: Arc<RwLock<Option<Url>>>,
+    root_uri: Arc<Mutex<Option<Url>>>,
 }
 
 impl Backend {
@@ -72,10 +72,7 @@ impl LanguageServer for Backend {
             return Err(Error::request_cancelled());
         }
 
-        self.root_uri
-            .write()
-            .await
-            .replace(params.root_uri.unwrap());
+        self.root_uri.lock().await.replace(params.root_uri.expect("root_uri is not found"));
 
         Ok(InitializeResult {
             server_info: None,
@@ -96,49 +93,14 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "server initialized!")
+            .log_message(MessageType::INFO, "Server initialized!")
             .await;
 
-        // I'm shocked by this myself O_O
-        let uri = self.root_uri.read().await.clone().unwrap().clone();
+        let guard = self.root_uri.lock().await;
+        let root_path = guard.as_ref().unwrap().to_file_path().expect("invalid path");
 
-        let csharp_parser = Arc::new(csharp::parse);
-        let csharp_dispatcher = Arc::new(csharp::dispatch);
-        let matchers = vec![
-            FileGroup::new(
-                "C# prototypes",
-                "*Prototype.cs",
-                csharp_parser.clone(),
-                csharp_dispatcher.clone(),
-            ),
-            FileGroup::new(
-                "C# components",
-                "*Component.cs",
-                csharp_parser.clone(),
-                csharp_dispatcher.clone(),
-            ),
-            FileGroup::new(
-                "others C# files",
-                "*.cs",
-                csharp_parser.clone(),
-                csharp_dispatcher.clone(),
-            ),
-            FileGroup::new(
-                "fluent files",
-                "*.ftl",
-                Arc::new(fluent::parse),
-                Arc::new(fluent::dispatch),
-            ),
-            FileGroup::new(
-                "yaml files",
-                "**/Prototypes/**/*.{yml,yaml}",
-                Arc::new(yaml::parse),
-                Arc::new(yaml::dispatch),
-            ),
-        ];
-
-        let parser = ProjectParser::new(uri, self.context.clone(), self.client.clone());
-        parser.parse(matchers).await;
+        let parser = ProjectParser::new(&root_path, self.context.clone(), self.client.clone());
+        parser.parse().await;
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
@@ -218,7 +180,7 @@ impl LanguageServer for Backend {
             "cs" => {
                 let result = csharp::parse(path.clone(), self.context.parsed_files.clone()).await;
                 match result {
-                    Ok(result) => {
+                    ParseResult::Csharp(_) => {
                         let ParseResult::Csharp(parsed_classes) = result else {
                             tracing::warn!("Failed to parse C# prototypes while saving file.");
                             return;
@@ -241,8 +203,8 @@ impl LanguageServer for Backend {
                             lock.remove(&class);
                         }
                     }
-                    Err(_) => {
-                        tracing::warn!("Failed to parse the file {}", path.display());
+                    _ => {
+                        tracing::warn!("Failed to parse file: {}.", params.text_document.uri);
                         return;
                     }
                 }
@@ -250,7 +212,7 @@ impl LanguageServer for Backend {
             "yml" | "yaml" => {
                 let result = yaml::parse(path.clone(), self.context.parsed_files.clone()).await;
                 match result {
-                    Ok(result) => {
+                    ParseResult::YamlPrototypes(_) => {
                         let ParseResult::YamlPrototypes(parsed_prototypes) = result else {
                             tracing::warn!("Failed to parse YAML prototypes while saving file.");
                             return;
@@ -281,8 +243,8 @@ impl LanguageServer for Backend {
                             lock.remove(&proto);
                         }
                     }
-                    Err(_) => {
-                        tracing::warn!("Failed to parse the file {}", path.display());
+                    _ => {
+                        tracing::warn!("Failed to parse file: {}.", params.text_document.uri);
                         return;
                     }
                 }
@@ -298,7 +260,7 @@ impl LanguageServer for Backend {
         let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
         let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
 
-        let root_path = self.root_uri.read().await.clone().unwrap().to_file_path().unwrap_or_default();
+        let root_path = self.root_uri.lock().await.as_ref().unwrap().to_file_path().unwrap_or_default();
 
         match extension {
             "yml" | "yaml" => {

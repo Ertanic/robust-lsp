@@ -125,7 +125,7 @@ impl ProgressStatus {
 
 #[inline(always)]
 pub fn percentage(actual: u32, max: u32) -> u32 {
-    (100 as f64 * actual as f64 / max as f64).round() as u32
+    (100f64 * actual as f64 / max as f64).round() as u32
 }
 
 pub fn block<Fn, F>(func: Fn) -> F::Output
@@ -160,8 +160,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
     // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
     } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
         let mut col = 0;
-        let mut chars = line.chars();
-        while let Some(ch) = chars.next() {
+        let chars = line.chars();
+        for ch in chars {
             if ch == '-' {
                 break;
             }

@@ -2,18 +2,19 @@ use crate::{
     backend::{Context, ParsedFiles},
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
-use async_scoped::TokioScope;
-use futures::future::BoxFuture;
-use globset::{Glob, GlobMatcher};
-use rayon::prelude::*;
+use futures::future::{join_all};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use structs::{csharp::CsharpClass, fluent::FluentKey, yaml::YamlPrototype};
+use std::num::NonZero;
+use std::thread::available_parallelism;
+use itertools::Itertools;
+use structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype};
 use tokio::sync::Mutex;
-use tower_lsp::{lsp_types::Url, Client};
+use tower_lsp::Client;
 use tracing::instrument;
+use walkdir::{DirEntry, WalkDir};
 
 pub mod common;
 pub mod csharp;
@@ -22,13 +23,9 @@ pub mod structs;
 pub mod yaml;
 
 pub(crate) type Result<T, E = ()> = std::result::Result<T, E>;
-#[rustfmt::skip]
-pub(crate) type Parser = Arc<dyn (Fn(PathBuf, ParsedFiles) -> BoxFuture<'static, Result<ParseResult>>) + Send + Sync>;
-#[rustfmt::skip]
-pub(crate) type ResultDispatcher = Arc<dyn (Fn(ParseResult, Arc<Context>) -> BoxFuture<'static, ()>) + Send + Sync>;
 
 #[inline(always)]
-fn get_folders(uri: &Url) -> Vec<PathBuf> {
+fn get_folders(root: &Path) -> Vec<PathBuf> {
     vec![
         "RobustToolbox/Robust.Client",
         "RobustToolbox/Robust.Server",
@@ -39,202 +36,121 @@ fn get_folders(uri: &Url) -> Vec<PathBuf> {
         "Resources/Prototypes",
         "Resources/Locale",
     ]
-    .into_iter()
-    .map(|f| uri.to_file_path().unwrap().join(f))
-    .filter(|f| f.exists())
-    .collect()
+        .into_iter()
+        .map(|f| root.join(f))
+        .filter(|f| f.exists())
+        .collect()
 }
 
 pub enum ParseResult {
-    Csharp(Vec<CsharpClass>),
+    Csharp(Vec<CsharpObject>),
     YamlPrototypes(Vec<YamlPrototype>),
     Fluent(Vec<FluentKey>),
+    None,
 }
 
-pub struct ProjectParser {
-    uri: Url,
+pub struct ProjectParser<'a> {
+    root: &'a Path,
     context: Arc<Context>,
     client: Arc<Client>,
 }
 
-impl ProjectParser {
-    pub fn new(uri: Url, context: Arc<Context>, client: Arc<Client>) -> Self {
-        Self {
-            uri,
-            context,
-            client,
-        }
+impl<'a> ProjectParser<'a> {
+    pub fn new(root: &'a Path, context: Arc<Context>, client: Arc<Client>) -> Self {
+        Self { root, context, client }
     }
 
-    pub async fn parse<'a>(&self, matchers: Vec<FileGroup>) {
-        let matchers = Arc::new(matchers);
+    pub async fn parse(&self) {
+        let files = collect_files(get_folders(&self.root)).await;
+        let files_count = files.len();
+        tracing::info!("{} files found", files_count);
 
-        let folders = get_folders(&self.uri);
-        let collected_files = collect_files(folders, matchers.clone());
+        let cpu = available_parallelism().unwrap_or(NonZero::new(4).unwrap()).get() / 2;
+        let parser_status = Arc::new(Mutex::new(ParserHandler::new(files_count as u32, self.client.clone(), "project files").await));
 
-        let mut files_handlers = futures::future::join_all(
-            collected_files
-                .iter()
-                .inspect(|(id, files)| tracing::info!("{} {id} files found", files.len()))
-                .map(|(id, files)| async {
-                    ParserHandler {
-                        id: id.clone(),
-                        actual_count: 0,
-                        total_count: files.len() as u32,
-                        status: get_status(self.client.clone(), &id.clone()).await,
-                        finished: false,
+        let results = join_all(files.into_iter()
+            .chunks(files_count / cpu)
+            .into_iter()
+            .map(|chunk| {
+                let chunk = chunk.collect::<Vec<_>>();
+                let parsed_files = self.context.parsed_files.clone();
+                let parser_status = parser_status.clone();
+
+                tokio::spawn(async move {
+                    let mut results = Vec::with_capacity(chunk.len());
+
+                    for file in chunk {
+                        let Some(ext) = file.extension() else { continue };
+
+                        let result = match ext.to_str().expect("unrecognized extension") {
+                            "cs" => csharp::parse(file, parsed_files.clone()).await,
+                            "yml" => yaml::parse(file, parsed_files.clone()).await,
+                            "ftl" => fluent::parse(file, parsed_files.clone()).await,
+                            _ => continue,
+                        };
+
+                        parser_status.lock().await.increment().await;
+
+                        results.push(result);
                     }
-                }),
-        )
-        .await;
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        tokio::spawn({
-            let matchers = matchers.clone();
-            let context = self.context.clone();
-            async move {
-                while let Some((id, result)) = rx.recv().await {
-                    files_handlers
-                        .iter_mut()
-                        .find(|h| h.id == id)
-                        .unwrap()
-                        .increment()
-                        .await;
-
-                    let Ok(result) = result else {
-                        continue;
-                    };
-
-                    let matcher = matchers.par_iter().find_any(|m| m.id == id).unwrap();
-                    let dispatcher = &matcher.dispatcher;
-                    dispatcher(result, context.clone()).await;
-                }
-                futures::future::join_all(
-                    files_handlers
-                        .iter_mut()
-                        .map(|h| async move { h.finish().await }),
-                )
-                .await;
-
-                tracing::trace!("Parsing finished.");
-            }
-        });
-
-        let handlers = futures::future::join_all(
-            collected_files
-                .into_iter()
-                .map(|(id, files)| {
-                    let id = id.clone();
-                    let matchers = matchers.clone();
-                    let tx = tx.clone();
-
-                    files.into_iter().map(move |f| {
-                        let tx = tx.clone();
-                        let context = self.context.clone();
-                        let matchers = matchers.clone();
-                        let id = id.clone();
-
-                        tokio::spawn(async move {
-                            let matcher = matchers.iter().find(|m| m.id == id).unwrap();
-                            let parser = matcher.parser.clone();
-                            let result = parser(f, context.parsed_files.clone()).await;
-
-                            if let Err(err) = tx.send((matcher.id.clone(), result)).await {
-                                tracing::error!("Failed to send result: {}", err);
-                            }
-                        })
-                    })
+                    results
                 })
-                .flatten(),
-        );
+            }))
+            .await
+            .into_iter()
+            .filter_map(Result::ok)
+            .flatten()
+            .collect::<Vec<_>>();
 
-        handlers.await;
-    }
-}
+        parser_status.lock().await.finish().await;
 
-pub struct FileGroup {
-    id: String,
-    parser: Parser,
-    dispatcher: ResultDispatcher,
-    set: GlobMatcher,
-}
+        for result in results.into_iter().filter(|r| !matches!(r, ParseResult::None)) {
+            let mut classes = self.context.classes.write().await;
+            let mut prototypes = self.context.prototypes.write().await;
+            let mut locales = self.context.locales.write().await;
 
-impl FileGroup {
-    pub fn new(
-        id: impl ToString,
-        set: impl AsRef<str>,
-        parser: Parser,
-        dispatcher: ResultDispatcher,
-    ) -> Self {
-        Self {
-            id: id.to_string(),
-            parser,
-            dispatcher,
-            set: Glob::new(set.as_ref()).unwrap().compile_matcher(),
+            match result {
+                ParseResult::Csharp(objs) => {
+                    objs.into_iter().for_each(|obj| { classes.insert(obj); });
+                }
+                ParseResult::YamlPrototypes(protos) => {
+                    protos.into_iter().for_each(|proto| { prototypes.insert(proto); });
+                }
+                ParseResult::Fluent(ftls) => {
+                    ftls.into_iter().for_each(|key| { locales.insert(key); });
+                }
+                ParseResult::None => {}
+            }
         }
     }
-
-    fn is_match(&self, path: &Path) -> bool {
-        self.set.is_match(path)
-    }
 }
 
-fn collect_files(
+async fn collect_files(
     folders: Vec<PathBuf>,
-    matches: Arc<Vec<FileGroup>>,
-) -> Vec<(String, Vec<PathBuf>)> {
-    let mut files: Vec<(String, Vec<PathBuf>)> = vec![];
+) -> Vec<PathBuf> {
+    let tasks = folders
+        .into_iter()
+        .map(|folder| tokio::spawn(async {
+            WalkDir::new(folder)
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(DirEntry::into_path)
+                .collect::<Vec<PathBuf>>()
+        }))
+        .collect::<Vec<_>>();
 
-    TokioScope::scope_and_block(|s| {
-        let (tx, rx) = std::sync::mpsc::channel();
+    let files = join_all(tasks)
+        .await
+        .into_iter()
+        .filter_map(Result::ok)
+        .flatten()
+        .collect::<Vec<_>>();
 
-        folders.into_iter().for_each(|folder| {
-            let tx = tx.clone();
-            let matches = matches.clone();
-
-            s.spawn(async move {
-                tracing::trace!("Start file search in {} folder", folder.display());
-
-                for file in walkdir::WalkDir::new(&folder) {
-                    match file {
-                        Ok(file) => {
-                            let path = file.path();
-                            let matcher = matches.iter().find(|m| m.is_match(path));
-
-                            if let Some(matcher) = matcher {
-                                if let Err(err) = tx.send((matcher.id.clone(), path.to_path_buf()))
-                                {
-                                    tracing::error!("Failed to send file: {}", err);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!("Failed to read file: {}", err);
-                        }
-                    }
-                }
-
-                tracing::trace!("End file search in {} folder", folder.display());
-            });
-        });
-
-        s.spawn(async {
-            for (id, path) in rx {
-                match files.iter_mut().find(|(gid, _)| *gid == *id) {
-                    Some(f) => f.1.push(path.to_path_buf()),
-                    None => files.push((id.to_owned(), vec![path.to_path_buf()])),
-                }
-            }
-        });
-    });
-
-    files.par_sort_by_key(|(_, files)| files.len());
     files
 }
 
 struct ParserHandler {
-    id: String,
     actual_count: u32,
     total_count: u32,
     status: Arc<Mutex<ProgressStatus>>,
@@ -242,34 +158,36 @@ struct ParserHandler {
 }
 
 impl ParserHandler {
-    async fn increment(&mut self) {
+    pub async fn new(total_count: u32, client: Arc<Client>, name: &str) -> Self {
+        Self { actual_count: 0, total_count, status: get_status(client, name).await, finished: false }
+    }
+
+    pub async fn increment(&mut self) {
         self.actual_count += 1;
 
         if self.finished {
             return;
+        } else if self.actual_count == self.total_count {
+            self.finished = true;
+            self.status.lock().await.finish(None).await;
         } else {
-            if self.actual_count == self.total_count {
-                self.finished = true;
-                self.status.lock().await.finish(None).await;
-            } else {
-                let percent = percentage(self.actual_count, self.total_count);
+            let percent = percentage(self.actual_count, self.total_count);
 
-                self.status
-                    .lock()
-                    .await
-                    .next_state(
-                        percent,
-                        Some(format!(
-                            "{}/{} ({percent}%)",
-                            self.actual_count, self.total_count
-                        )),
-                    )
-                    .await;
-            }
+            self.status
+                .lock()
+                .await
+                .next_state(
+                    percent,
+                    Some(format!(
+                        "{}/{} ({percent}%)",
+                        self.actual_count, self.total_count
+                    )),
+                )
+                .await;
         }
     }
 
-    async fn finish(&mut self) {
+    pub async fn finish(&mut self) {
         if self.finished {
             return;
         } else {
@@ -291,7 +209,7 @@ async fn get_status(client: Arc<Client>, name: &str) -> Arc<Mutex<ProgressStatus
             ..Default::default()
         },
     )
-    .await;
+        .await;
 
     Arc::new(Mutex::new(status))
 }

@@ -1,13 +1,13 @@
 use backend::Backend;
 use clap::{arg, command, crate_version};
-use std::io;
+use log::init_logger;
 use tower_lsp::{LspService, Server};
-use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod backend;
 mod completion;
 mod goto;
 mod hint;
+mod log;
 mod parse;
 mod utils;
 
@@ -23,27 +23,11 @@ async fn main() {
         return;
     }
 
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .compact()
-        .with_ansi(false)
-        .without_time()
-        .with_line_number(true)
-        .with_file(true)
-        .with_writer(io::stderr)
-        .with_thread_ids(true);
-
-    let targets = filter::Targets::new().with_target("robust_lsp", filter::LevelFilter::TRACE);
-    #[cfg(debug_assertions)]
-    let targets = targets.with_target("tower_lsp", filter::LevelFilter::TRACE);
-
-    tracing_subscriber::registry()
-        .with(targets)
-        .with(fmt_layer)
-        .init();
+    init_logger();
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend::new(client));
+    let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }

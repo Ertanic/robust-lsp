@@ -299,7 +299,8 @@ impl LanguageServer for Backend {
 
                 match rope {
                     Some(rope) => {
-                        let definition = YamlGotoDefinition::new(self.context.clone(), params.text_document_position_params.position, rope);
+                        let root = self.root_uri.lock().await.as_ref().unwrap().to_file_path().unwrap_or_default();
+                        let definition = YamlGotoDefinition::new(self.context.clone(), params.text_document_position_params.position, rope, root);
                         Ok(definition.goto_definition())
                     }
                     None => {

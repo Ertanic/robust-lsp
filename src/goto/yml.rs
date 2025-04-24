@@ -12,7 +12,7 @@ use crate::{
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use stringcase::camel_case;
 use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{self, GotoDefinitionResponse, Location, LocationLink, Position, Url};
@@ -23,6 +23,7 @@ pub struct YamlGotoDefinition {
     position: Position,
     src: String,
     tree: Tree,
+    project_root: PathBuf,
 }
 
 impl GotoDefinition for YamlGotoDefinition {
@@ -42,14 +43,19 @@ impl GotoDefinition for YamlGotoDefinition {
                 .or_else(|| self.try_goto_prototype_definition(found_node)),
             4 => self
                 .try_goto_locid_definition(found_node, nest)
-                .or_else(|| self.try_goto_component_definition(found_node)),
+                .or_else(|| self.try_goto_sprite_definition(found_node, nest)),
             _ => None,
         }
     }
 }
 
 impl YamlGotoDefinition {
-    pub fn new(context: Arc<Context>, position: Position, rope: &Rope) -> Self {
+    pub fn new(
+        context: Arc<Context>,
+        position: Position,
+        rope: &Rope,
+        project_root: PathBuf,
+    ) -> Self {
         let src = rope.to_string();
 
         let mut parser = Parser::new();
@@ -61,7 +67,82 @@ impl YamlGotoDefinition {
             position,
             src,
             tree,
+            project_root,
         }
+    }
+
+    fn try_goto_sprite_definition(
+        &self,
+        found_node: Node<'_>,
+        nest: usize,
+    ) -> GotoDefinitionResult {
+        debug_assert!(nest <= 4);
+
+        let block_mapping_pair = {
+            let mut node = found_node;
+            while let Some(n) = node.parent() {
+                node = n;
+                if n.kind() == "block_mapping_pair" {
+                    break;
+                }
+            }
+            node
+        };
+
+        if block_mapping_pair.kind() != "block_mapping_pair" {
+            tracing::trace!("not a block mapping pair");
+            return None;
+        }
+
+        let key_node = block_mapping_pair.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        if key_name == found_node.utf8_text(self.src.as_bytes()).ok()? {
+            return None;
+        }
+
+        let value_node = block_mapping_pair.child_by_field_name("value")?;
+        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        let comp_name = self
+            .get_field(&block_mapping_pair.parent()?, "type")?
+            .child_by_field_name("value")?
+            .utf8_text(self.src.as_bytes())
+            .ok()?;
+
+        let reflection = ReflectionManager::new(self.context.classes.clone());
+        let comp = block(|| reflection.get_component_by_name(comp_name))?;
+
+        let field = block(|| reflection.get_fields(&comp))
+            .into_iter()
+            .find(|f| f.get_data_field_name() == key_name)?;
+
+        if field.get_data_field_name() != "sprite" {
+            tracing::trace!("not a sprite field");
+            return None;
+        }
+
+        let rsi_path = self
+            .project_root
+            .join(format!("Resources/Textures/{}/meta.json", value));
+
+        let location = LocationLink {
+            origin_selection_range: Some(lsp_types::Range {
+                start: Position {
+                    line: value_node.start_position().row as u32,
+                    character: value_node.start_position().column as u32,
+                },
+                end: Position {
+                    line: value_node.end_position().row as u32,
+                    character: value_node.end_position().column as u32,
+                },
+            }),
+            target_uri: Url::from_directory_path(rsi_path).ok()?,
+            target_range: Default::default(),
+            target_selection_range: Default::default(),
+        };
+
+        Some(GotoDefinitionResponse::Link(vec![location]))
     }
 
     #[tracing::instrument(skip(self), ret)]
@@ -107,17 +188,20 @@ impl YamlGotoDefinition {
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
 
-                if field.type_name != "LocId" {
-                    tracing::trace!("not a locid field");
-                    return None;
+                match field.type_name.as_str() {
+                    "LocId" => {
+                        let lock = block_in_place(|| self.context.locales.blocking_read());
+                        let locale = lock.get(&FluentKey::dummy(value))?;
+
+                        let location = get_location_link(locale.index(), value_node)?;
+
+                        Some(GotoDefinitionResponse::Link(vec![location]))
+                    }
+                    _ => {
+                        tracing::trace!("unknown field");
+                        None
+                    }
                 }
-
-                let lock = block_in_place(|| self.context.locales.blocking_read());
-                let locale = lock.get(&FluentKey::dummy(value))?;
-
-                let location = get_location_link(locale.index(), value_node)?;
-
-                Some(GotoDefinitionResponse::Link(vec![location]))
             }
             4 => {
                 let comp_name = self
@@ -301,7 +385,7 @@ impl YamlGotoDefinition {
     }
 
     fn index_to_definition(&self, index: &DefinitionIndex) -> GotoDefinitionResult {
-        let url = Url::from_file_path(index.0.clone()).ok()?;
+        let uri = Url::from_file_path(index.0.clone()).ok()?;
         let (start_position, end_position) = {
             let range = index.1?;
             (
@@ -313,10 +397,7 @@ impl YamlGotoDefinition {
             )
         };
         let range = lsp_types::Range::new(start_position, end_position);
-        let definition = GotoDefinitionResponse::Scalar(Location {
-            uri: url,
-            range: range,
-        });
+        let definition = GotoDefinitionResponse::Scalar(Location { uri, range });
 
         Some(definition)
     }

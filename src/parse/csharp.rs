@@ -2,7 +2,7 @@ use super::{
     common::{DefinitionIndex, ParseFromNode},
     structs::csharp::{
         CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
-        CsharpAttributeCollection, CsharpObject, CsharpClassField,
+        CsharpAttributeCollection, CsharpClassField, CsharpObject,
     },
     ParseResult,
 };
@@ -50,34 +50,23 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
         let src = Arc::new(rope);
         let mut stack = vec![root_node];
 
-        // TODO: Replace scope to TokioScope
-        let classes = std::thread::scope(|s| {
-            let mut handles = vec![];
+        let mut objects = vec![];
 
-            while !stack.is_empty() {
-                let node = stack.pop().unwrap();
+        while let Some(node) = stack.pop() {
+            if node.kind() == "class_declaration" || node.kind() == "interface_declaration" {
+                let src = src.clone();
 
-                if node.kind() == "class_declaration" {
-                    let src = src.clone();
-                    handles.push(s.spawn({
-                        let path = path.clone();
-                        move || CsharpObject::get(node, src, &path)
-                    }));
-                }
-
-                for i in 0..node.named_child_count() {
-                    stack.push(node.named_child(i).unwrap());
+                if let Ok(result) = CsharpObject::get(node, src, &path) {
+                    objects.push(result);
                 }
             }
 
-            handles
-                .into_iter()
-                .map(|h| h.join().unwrap())
-                .filter_map(Result::ok)
-                .collect::<Vec<_>>()
-        });
+            for i in 0..node.named_child_count() {
+                stack.push(node.named_child(i).unwrap());
+            }
+        }
 
-        return ParseResult::Csharp(classes);
+        return ParseResult::Csharp(objects);
     }
 
     ParseResult::None
@@ -396,9 +385,9 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                             }
 
                             if let Some(arg_value) = arg_value {
-                                let name = if arg_name.is_some() {
+                                let name = if let Some(arg_name1) = arg_name {
                                     // an argument of attribute may contain a name
-                                    arg_name.unwrap()
+                                    arg_name1
                                 } else if attr_name.is_some() {
                                     // if an attribute name has been found
                                     let attr_name = attr_name.clone().unwrap();

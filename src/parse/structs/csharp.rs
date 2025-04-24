@@ -194,7 +194,7 @@ impl Prototype {
             }
         }
 
-        if let None = name {
+        if name.is_none() {
             name = Some(self.class.name.clone());
         }
 

@@ -10,6 +10,7 @@ mod hint;
 mod log;
 mod parse;
 mod utils;
+mod references;
 
 #[tokio::main]
 async fn main() {

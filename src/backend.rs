@@ -1,3 +1,5 @@
+use crate::references::csharp::CsharpReferencesProvider;
+use crate::references::ReferencesProvider;
 use crate::{
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
@@ -18,6 +20,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{Mutex, RwLock};
+use tower_lsp::lsp_types::{Location, ReferenceParams};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
@@ -72,7 +75,10 @@ impl LanguageServer for Backend {
             return Err(Error::request_cancelled());
         }
 
-        self.root_uri.lock().await.replace(params.root_uri.expect("root_uri is not found"));
+        self.root_uri
+            .lock()
+            .await
+            .replace(params.root_uri.expect("root_uri is not found"));
 
         Ok(InitializeResult {
             server_info: None,
@@ -86,6 +92,7 @@ impl LanguageServer for Backend {
                 }),
                 definition_provider: Some(Left(true)),
                 inlay_hint_provider: Some(Left(true)),
+                references_provider: Some(Left(true)),
                 ..Default::default()
             },
         })
@@ -97,7 +104,11 @@ impl LanguageServer for Backend {
             .await;
 
         let guard = self.root_uri.lock().await;
-        let root_path = guard.as_ref().unwrap().to_file_path().expect("invalid path");
+        let root_path = guard
+            .as_ref()
+            .unwrap()
+            .to_file_path()
+            .expect("invalid path");
 
         let parser = ProjectParser::new(&root_path, self.context.clone(), self.client.clone());
         parser.parse().await;
@@ -310,6 +321,45 @@ impl LanguageServer for Backend {
                 }
             }
             _ => Ok(None)
+        }
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        tracing::trace!("References request has been received.");
+
+        let file = params
+            .text_document_position
+            .text_document
+            .uri
+            .to_file_path()
+            .unwrap_or_default();
+        let extension = file
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default();
+
+        match extension {
+            "cs" => {
+                let opened = self.opened_files.read().await;
+                let rope = opened.get(&params.text_document_position.text_document.uri);
+
+                match rope {
+                    Some(rope) => {
+                        let provider = CsharpReferencesProvider::new(
+                            self.context.clone(),
+                            params.text_document_position.position,
+                            rope,
+                        );
+                        Ok(provider.get_references())
+                    }
+                    None => {
+                        tracing::trace!("File wasn't cached.");
+                        Ok(None)
+                    }
+                }
+            }
+            _ => Ok(None),
         }
     }
 

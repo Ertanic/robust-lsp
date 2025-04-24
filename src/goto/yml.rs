@@ -43,7 +43,9 @@ impl GotoDefinition for YamlGotoDefinition {
                 .or_else(|| self.try_goto_prototype_definition(found_node)),
             4 => self
                 .try_goto_locid_definition(found_node, nest)
-                .or_else(|| self.try_goto_sprite_definition(found_node, nest)),
+                .or_else(|| self.try_goto_sprite_definition(found_node, nest))
+                .or_else(|| self.try_goto_protoid_definition(found_node, nest))
+                .or_else(|| self.try_goto_component_definition(found_node)),
             _ => None,
         }
     }
@@ -71,12 +73,76 @@ impl YamlGotoDefinition {
         }
     }
 
+    fn try_goto_protoid_definition(
+        &self,
+        found_node: Node<'_>,
+        nest: usize,
+    ) -> GotoDefinitionResult {
+        debug_assert!(nest >= 4);
+
+        let block_mapping_pair = {
+            let mut node = found_node;
+            while let Some(n) = node.parent() {
+                node = n;
+                if n.kind() == "block_mapping_pair" {
+                    break;
+                }
+            }
+            node
+        };
+
+        if block_mapping_pair.kind() != "block_mapping_pair" {
+            tracing::trace!("not a block mapping pair");
+            return None;
+        }
+
+        let key_node = block_mapping_pair.child_by_field_name("key")?;
+        let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        if key_name == found_node.utf8_text(self.src.as_bytes()).ok()? {
+            return None;
+        }
+
+        let value_node = block_mapping_pair.child_by_field_name("value")?;
+
+        let comp_name = self
+            .get_field(&block_mapping_pair.parent()?, "type")?
+            .child_by_field_name("value")?
+            .utf8_text(self.src.as_bytes())
+            .ok()?;
+
+        let reflection = ReflectionManager::new(self.context.classes.clone());
+        let comp = block(|| reflection.get_component_by_name(comp_name))?;
+
+        let field = block(|| reflection.get_fields(&comp))
+            .into_iter()
+            .find(|f| f.get_data_field_name() == key_name)?;
+
+        if !field.type_name.starts_with("ProtoId<") {
+            tracing::trace!("not a ProtoId field");
+            return None;
+        }
+
+        let type_name = &field.type_name[8..field.type_name.len() - 1];
+        let id = value_node.utf8_text(self.src.as_bytes()).ok()?;
+
+        let binding = block_in_place(|| self.context.prototypes.blocking_read());
+
+        let proto = binding.par_iter().find_any(|p| {
+            tracing::trace!("{} == {} && {}", p.prototype, camel_case(type_name.trim_end_matches("Prototype").trim_end_matches(">")), id);
+            p.prototype == camel_case(type_name.trim_end_matches(">").trim_end_matches("Prototype")) && p.id == id
+        })?;
+
+        let location = get_location_link(proto.index(), value_node)?;
+        Some(GotoDefinitionResponse::Link(vec![location]))
+    }
+
     fn try_goto_sprite_definition(
         &self,
         found_node: Node<'_>,
         nest: usize,
     ) -> GotoDefinitionResult {
-        debug_assert!(nest <= 4);
+        debug_assert!(nest >= 4);
 
         let block_mapping_pair = {
             let mut node = found_node;

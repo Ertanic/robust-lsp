@@ -2,7 +2,7 @@
   "name": "robust-lsp",
   "displayName": "Robust LSP",
   "description": "Language Server Protocol for Robust Toolbox",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "license": "GPL-3.0-only",
   "icon": "resources/icon.png",
   "repository": {

@@ -31,6 +31,10 @@ export async function activate(context: ExtensionContext) {
 		const buffer = await (await (await f(url)).blob()).bytes();
 		await workspace.fs.writeFile(lsp_path, buffer);
 
+		if (isLinux()) {
+			chmodExecutable(lsp_path.fsPath);
+		}
+
 		window.showInformationMessage('robust-lsp has been installed.');
 	}
 
@@ -52,7 +56,7 @@ export async function activate(context: ExtensionContext) {
 
 		const curr_ver = new Version(stdout);
 		const latest_ver = new Version(info?.tag_name!);
-		const newer = await curr_ver.isNewer(latest_ver);
+		const newer = curr_ver.isNewer(latest_ver);
 
 		console.log(`Latest version (${info?.tag_name}) newer current version (${stdout})?: ${newer}`);
 
@@ -73,6 +77,10 @@ export async function activate(context: ExtensionContext) {
 
 				const buffer = await (await (await f(uri)).blob()).bytes();
 				await workspace.fs.writeFile(lsp_path, buffer);
+
+				if (isLinux()) {
+					chmodExecutable(lsp_path.fsPath);
+				}
 
 				window.showInformationMessage('robust-lsp has been updated.');
 			}
@@ -205,4 +213,22 @@ class Version {
 	isNewer(ver: Version): boolean {
 		return this.major < ver.major || this.minor < ver.minor || this.patch < ver.patch
 	}
+}
+
+function isLinux(): boolean {
+	return process.platform === 'linux';
+}
+
+function chmodExecutable(path: string): void {
+	exec(`chmod +x ${path}`, async (err, stdout, stderr) => {
+		if (err) {
+			console.error(err);
+			return;
+		}
+
+		if (stderr) {
+			console.error(stderr);
+			return;
+		}
+	});
 }

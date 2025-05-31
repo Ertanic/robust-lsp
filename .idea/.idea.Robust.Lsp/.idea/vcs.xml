@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox/Lidgren.Network/Lidgren.Network" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox/NetSerializer" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox/Robust.LoaderApi" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox/XamlX" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/examples/space-station-14/RobustToolbox/cefglue" vcs="Git" />
+  </component>
+</project>

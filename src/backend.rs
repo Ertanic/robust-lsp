@@ -38,7 +38,7 @@ use tree_sitter::Tree;
 pub type FluentLocales = Arc<RwLock<HashSet<FluentKey>>>;
 pub type CsharpClasses = Arc<RwLock<HashSet<CsharpObject>>>;
 pub type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
-pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Tree>>>;
+pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Tree>>>>;
 
 #[derive(Default)]
 pub struct Context {

@@ -8,6 +8,7 @@ use super::{
 };
 use crate::backend::ParsedFiles;
 use ropey::Rope;
+use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -32,18 +33,25 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
-        .expect("Failed to load C# grammer");
+        .expect("Failed to load C# grammar");
 
     let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
 
-    let mut lock = parsed_files.write().await;
-    let old_tree = lock.get_mut(&path);
+    let lock = parsed_files.read().await;
+    let old_tree = lock.get(&path);
 
-    let tree = parser.parse(rope.to_string(), old_tree.as_deref());
+    let tree = if let Some(old_tree) = old_tree {
+        parser.parse(rope.to_string(), Some(old_tree.deref()))
+    } else {
+        parser.parse(rope.to_string(), None)
+    };
+
     if let Some(tree) = tree {
+        let tree = Arc::new(tree);
         if let Some(old_tree) = old_tree {
-            *old_tree = tree.clone();
+            let old_tree = Arc::clone(old_tree);
             drop(lock);
+            parsed_files.write().await.insert(path.clone(), old_tree);
         }
 
         let root_node = tree.root_node();

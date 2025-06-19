@@ -1,8 +1,7 @@
 use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles};
 use crate::parse::ParseResult;
-use ropey::Rope;
-use std::{path::PathBuf};
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tree_sitter::Node;
 
@@ -12,19 +11,17 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
         .set_language(&tree_sitter_yaml::language())
         .expect("Failed to load YAML grammar");
 
-    let rope = Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+    let src = Arc::new(std::fs::read_to_string(&path).expect("file cannot be read"));
 
     let lock = parsed_files.read().await;
     let old_tree = lock.get(&path);
 
-    let src = rope.to_string();
-
     let tree = if let Some(old_tree) = old_tree {
-        parser.parse(&src, Some(old_tree.deref()))
+        parser.parse(src.deref(), Some(old_tree.deref()))
     } else {
-        parser.parse(&src, None)
+        parser.parse(src.deref(), None)
     };
-    
+
     if let Some(tree) = tree {
         if let Some(old_tree) = old_tree {
             let old_tree = Arc::clone(old_tree);

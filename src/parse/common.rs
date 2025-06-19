@@ -1,5 +1,4 @@
 use super::Result;
-use ropey::Rope;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -14,7 +13,7 @@ pub trait Index {
 }
 
 pub(super) trait ParseFromNode {
-    fn get(node: Node, src: Arc<Rope>, path: &Path) -> Result<Self>
+    fn get(node: Node, src: Arc<String>, path: &Path) -> Result<Self>
     where
         Self: Sized;
 }

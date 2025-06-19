@@ -1,5 +1,7 @@
+use std::ops::Deref;
+use std::sync::Arc;
 use super::InlayHint;
-use crate::{backend::CsharpClasses, parse::structs::csharp::ReflectionManager, utils::block};
+use crate::{backend::CsharpObjects, parse::structs::csharp::ReflectionManager, utils::block};
 use ropey::Rope;
 use stringcase::camel_case;
 use tower_lsp::lsp_types::{InlayHintKind, InlayHintLabel, Position, Range};
@@ -14,7 +16,7 @@ enum FieldType<'a> {
 }
 
 pub struct YamlInlayHint {
-    classes: CsharpClasses,
+    classes: CsharpObjects,
     range: Range,
     src: String,
     tree: Tree,
@@ -57,7 +59,7 @@ impl InlayHint for YamlInlayHint {
 }
 
 impl YamlInlayHint {
-    pub fn new(classes: CsharpClasses, range: Range, rope: &Rope) -> Self {
+    pub fn new(classes: CsharpObjects, range: Range, rope: &Rope) -> Self {
         let src = rope.to_string();
 
         let mut parser = Parser::new();
@@ -86,7 +88,7 @@ impl YamlInlayHint {
                     let key_node = node.child_by_field_name("key")?;
                     let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
-                    let field = block(|| reflection.get_fields(&proto))
+                    let field = block(|| reflection.get_fields(Arc::clone(&**proto)))
                         .into_iter()
                         .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -116,7 +118,7 @@ impl YamlInlayHint {
                     let key_node = node.child_by_field_name("key")?;
                     let key_name = key_node.utf8_text(self.src.as_bytes()).ok()?;
 
-                    let field = block(|| reflection.get_fields(&comp))
+                    let field = block(|| reflection.get_fields(Arc::clone(&**comp)))
                         .into_iter()
                         .find(|f| f.get_data_field_name() == key_name)?;
 

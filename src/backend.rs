@@ -35,15 +35,15 @@ use tower_lsp::{
 use tracing::instrument;
 use tree_sitter::Tree;
 
-pub type FluentLocales = Arc<RwLock<HashSet<FluentKey>>>;
-pub type CsharpClasses = Arc<RwLock<HashSet<CsharpObject>>>;
-pub type YamlPrototypes = Arc<RwLock<HashSet<YamlPrototype>>>;
+pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
+pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;
+pub type YamlPrototypes = Arc<RwLock<HashSet<Arc<YamlPrototype>>>>;
 pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Tree>>>>;
 
 #[derive(Default)]
 pub struct Context {
     pub parsed_files: ParsedFiles,
-    pub classes: CsharpClasses,
+    pub classes: CsharpObjects,
     pub prototypes: YamlPrototypes,
     pub locales: FluentLocales,
 }
@@ -207,7 +207,7 @@ impl LanguageServer for Backend {
 
                         for class in parsed_classes {
                             tracing::info!("New/changed class: {}", class.name);
-                            lock.insert(class);
+                            lock.insert(Arc::new(class));
                         }
                         for class in diff {
                             tracing::info!("Remove class: {}", class.name);
@@ -242,7 +242,7 @@ impl LanguageServer for Backend {
                                 proto.prototype,
                                 proto.id
                             );
-                            lock.insert(proto);
+                            lock.insert(Arc::new(proto));
                         }
 
                         for proto in diff {

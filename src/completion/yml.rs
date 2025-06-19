@@ -72,7 +72,7 @@ impl Completion for YamlCompletion {
                     _ => None,
                 }
             }
-            _ => return None,
+            _ => None,
         }
     }
 }
@@ -343,7 +343,7 @@ impl YamlCompletion {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let comp = block(|| reflection.get_component_by_name(object_name))?;
-        let field = block(|| reflection.get_fields(&comp))
+        let field = block(|| reflection.get_fields(Arc::clone(&comp)))
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -611,7 +611,7 @@ impl YamlCompletion {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let prototype = block(|| reflection.get_prototype_by_name(object_name))?;
-        let field = block(|| reflection.get_fields(&prototype))
+        let field = block(|| reflection.get_fields(Arc::clone(&prototype)))
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -983,7 +983,7 @@ impl YamlCompletion {
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.context.classes.clone());
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
-        let fields = block(|| reflection.get_fields(&comp))
+        let fields = block(|| reflection.get_fields(Arc::clone(&comp)))
             .into_par_iter()
             .filter(|f| {
                 f.attributes.contains("DataField") || f.attributes.contains("IncludeDataField")
@@ -1027,7 +1027,7 @@ impl YamlCompletion {
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.context.classes.clone());
         let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
-        let fields = block(|| reflection.get_fields(&proto))
+        let fields = block(|| reflection.get_fields(Arc::clone(&proto)))
             .into_par_iter()
             .filter(|f| f.attributes.contains("DataField"))
             .chain([CsharpClassField::new_empty("id", "string")])
@@ -1079,7 +1079,7 @@ impl YamlCompletion {
         let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
         let completions = lock
             .par_iter()
-            .filter_map(|c| Prototype::try_from(c).ok())
+            .filter_map(|c| Prototype::try_from(Arc::clone(c)).ok())
             .filter(|p| {
                 if let Some(value) = value_node {
                     let name = p.get_prototype_name().to_lowercase();
@@ -1150,7 +1150,9 @@ impl YamlCompletion {
         let value = node.child_by_field_name("value");
 
         let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
-        let completions = lock.par_iter().filter_map(|c| Component::try_from(c).ok());
+        let completions = lock
+            .par_iter()
+            .filter_map(|c| Component::try_from(Arc::clone(c)).ok());
 
         let map = |c: &Component| {
             let name = c.get_component_name();

@@ -114,7 +114,7 @@ impl YamlGotoDefinition {
         let reflection = ReflectionManager::new(self.context.classes.clone());
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
 
-        let field = block(|| reflection.get_fields(&comp))
+        let field = block(|| reflection.get_fields(Arc::clone(&comp)))
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -129,8 +129,23 @@ impl YamlGotoDefinition {
         let binding = block_in_place(|| self.context.prototypes.blocking_read());
 
         let proto = binding.par_iter().find_any(|p| {
-            tracing::trace!("{} == {} && {}", p.prototype, camel_case(type_name.trim_end_matches("Prototype").trim_end_matches(">")), id);
-            p.prototype == camel_case(type_name.trim_end_matches(">").trim_end_matches("Prototype")) && p.id == id
+            tracing::trace!(
+                "{} == {} && {}",
+                p.prototype,
+                camel_case(
+                    type_name
+                        .trim_end_matches("Prototype")
+                        .trim_end_matches(">")
+                ),
+                id
+            );
+            p.prototype
+                == camel_case(
+                    type_name
+                        .trim_end_matches(">")
+                        .trim_end_matches("Prototype"),
+                )
+                && p.id == id
         })?;
 
         let location = get_location_link(proto.index(), value_node)?;
@@ -179,7 +194,7 @@ impl YamlGotoDefinition {
         let reflection = ReflectionManager::new(self.context.classes.clone());
         let comp = block(|| reflection.get_component_by_name(comp_name))?;
 
-        let field = block(|| reflection.get_fields(&comp))
+        let field = block(|| reflection.get_fields(Arc::clone(&comp)))
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -250,7 +265,7 @@ impl YamlGotoDefinition {
                 let reflection = ReflectionManager::new(self.context.classes.clone());
                 let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
 
-                let field = block(|| reflection.get_fields(&proto))
+                let field = block(|| reflection.get_fields(Arc::clone(&proto)))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -279,7 +294,7 @@ impl YamlGotoDefinition {
                 let reflection = ReflectionManager::new(self.context.classes.clone());
                 let comp = block(|| reflection.get_component_by_name(comp_name))?;
 
-                let field = block(|| reflection.get_fields(&comp))
+                let field = block(|| reflection.get_fields(Arc::clone(&comp)))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -329,7 +344,7 @@ impl YamlGotoDefinition {
 
                 let comp = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
-                    .filter_map(|c| Component::try_from(c).ok())
+                    .filter_map(|c| Component::try_from(Arc::clone(c)).ok())
                     .find_any(|p| camel_case(&p.get_component_name()) == camel_case(seeking))?;
 
                 let index = comp.index();
@@ -348,11 +363,11 @@ impl YamlGotoDefinition {
 
                 let comp = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
-                    .filter_map(|c| Component::try_from(c).ok())
+                    .filter_map(|c| Component::try_from(Arc::clone(c)).ok())
                     .find_any(|p| camel_case(&p.get_component_name()) == camel_case(comp_name))?;
 
                 let reflection = ReflectionManager::new(self.context.classes.clone());
-                let field = block(|| reflection.get_fields(&comp))
+                let field = block(|| reflection.get_fields(Arc::clone(&comp)))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -392,7 +407,7 @@ impl YamlGotoDefinition {
 
                 let prototype = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
-                    .filter_map(|c| Prototype::try_from(c).ok())
+                    .filter_map(|c| Prototype::try_from(Arc::clone(c)).ok())
                     .find_any(|p| camel_case(&p.get_prototype_name()) == seeking)?;
 
                 let index = prototype.index();
@@ -436,11 +451,11 @@ impl YamlGotoDefinition {
 
                 let prototype = block_in_place(|| self.context.classes.blocking_read())
                     .par_iter()
-                    .filter_map(|c| Prototype::try_from(c).ok())
+                    .filter_map(|c| Prototype::try_from(Arc::clone(c)).ok())
                     .find_any(|p| camel_case(&p.get_prototype_name()) == proto_name)?;
 
                 let reflection = ReflectionManager::new(self.context.classes.clone());
-                let field = block(|| reflection.get_fields(&prototype))
+                let field = block(|| reflection.get_fields(Arc::clone(&prototype)))
                     .into_iter()
                     .find(|f| f.get_data_field_name() == key_name)?;
 

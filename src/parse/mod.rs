@@ -111,17 +111,17 @@ impl<'a> ProjectParser<'a> {
             match result {
                 ParseResult::Csharp(objs) => {
                     objs.into_iter().for_each(|obj| {
-                        classes.insert(obj);
+                        classes.insert(Arc::new(obj));
                     });
                 }
                 ParseResult::YamlPrototypes(protos) => {
                     protos.into_iter().for_each(|proto| {
-                        prototypes.insert(proto);
+                        prototypes.insert(Arc::new(proto));
                     });
                 }
                 ParseResult::Fluent(ftls) => {
                     ftls.into_iter().for_each(|key| {
-                        locales.insert(key);
+                        locales.insert(Arc::new(key));
                     });
                 }
                 ParseResult::None => {}

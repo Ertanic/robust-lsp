@@ -1,27 +1,28 @@
 #![allow(unused)]
 
 use super::*;
-use crate::backend::CsharpClasses;
+use crate::backend::CsharpObjects;
 use common::{DefinitionIndex, Index};
+use std::sync::Arc;
 use tree_sitter::Range;
 
 pub struct ReflectionManager {
-    classes: CsharpClasses,
+    classes: CsharpObjects,
 }
 
 impl ReflectionManager {
-    pub fn new(classes: CsharpClasses) -> Self {
+    pub fn new(classes: CsharpObjects) -> Self {
         Self { classes }
     }
 
-    pub async fn get_fields(&self, class: &CsharpObject) -> Vec<CsharpClassField> {
+    pub async fn get_fields(&self, class: Arc<CsharpObject>) -> Vec<CsharpClassField> {
         let lock = self.classes.read().await;
         let bases = class
             .base
-            .par_iter()
+            .iter()
             .map(|b| lock.par_iter().find_any(|c| c.name == *b))
             .filter_map(|c| c)
-            .chain([class])
+            .chain([&class])
             .collect::<Vec<_>>();
 
         let mut fields = Vec::with_capacity(bases.len());
@@ -32,7 +33,7 @@ impl ReflectionManager {
         fields
     }
 
-    pub async fn get_prototype_by_name(&self, name: impl AsRef<str>) -> Option<Prototype> {
+    pub async fn get_prototype_by_name(&self, name: impl AsRef<str>) -> Option<Arc<Prototype>> {
         let name = name.as_ref();
         let normalized_name = stringcase::pascal_case(name);
 
@@ -57,10 +58,10 @@ impl ReflectionManager {
             }
         });
 
-        Prototype::try_from(class?).ok()
+        Prototype::try_from(Arc::clone(class?)).ok().map(Arc::new)
     }
 
-    pub async fn get_component_by_name(&self, name: impl AsRef<str>) -> Option<Component> {
+    pub async fn get_component_by_name(&self, name: impl AsRef<str>) -> Option<Arc<Component>> {
         let name = name.as_ref();
 
         let lock = self.classes.read().await;
@@ -73,7 +74,7 @@ impl ReflectionManager {
             name && attr && base
         });
 
-        Component::try_from(class?).ok()
+        Component::try_from(Arc::clone(class?)).ok().map(Arc::new)
     }
 }
 
@@ -136,7 +137,7 @@ impl Extend<CsharpAttribute> for CsharpAttributeCollection {
 }
 
 pub struct Component {
-    class: CsharpObject,
+    class: Arc<CsharpObject>,
 }
 
 impl Component {
@@ -151,17 +152,15 @@ impl Component {
     }
 }
 
-impl TryFrom<&CsharpObject> for Component {
+impl TryFrom<Arc<CsharpObject>> for Component {
     type Error = ();
 
-    fn try_from(class: &CsharpObject) -> Result<Self, Self::Error> {
+    fn try_from(class: Arc<CsharpObject>) -> Result<Self, Self::Error> {
         if class.attributes.contains("RegisterComponent")
             && class.base.contains(&"Component".to_owned())
             || class.base.contains(&"IComponent".to_owned())
         {
-            Ok(Component {
-                class: class.clone(),
-            })
+            Ok(Component { class })
         } else {
             Err(())
         }
@@ -169,7 +168,7 @@ impl TryFrom<&CsharpObject> for Component {
 }
 
 impl Deref for Component {
-    type Target = CsharpObject;
+    type Target = Arc<CsharpObject>;
 
     fn deref(&self) -> &Self::Target {
         &self.class
@@ -178,7 +177,7 @@ impl Deref for Component {
 
 #[derive(Debug)]
 pub struct Prototype {
-    class: CsharpObject,
+    class: Arc<CsharpObject>,
 }
 
 impl Prototype {
@@ -207,13 +206,12 @@ impl Prototype {
     }
 }
 
-impl TryFrom<&CsharpObject> for Prototype {
+impl TryFrom<Arc<CsharpObject>> for Prototype {
     type Error = ();
-    fn try_from(class: &CsharpObject) -> Result<Self, Self::Error> {
+
+    fn try_from(class: Arc<CsharpObject>) -> Result<Self, Self::Error> {
         if class.base.contains(&"IPrototype".into()) && class.attributes.contains("Prototype") {
-            Ok(Self {
-                class: class.clone(),
-            })
+            Ok(Self { class })
         } else {
             Err(())
         }
@@ -221,7 +219,7 @@ impl TryFrom<&CsharpObject> for Prototype {
 }
 
 impl Deref for Prototype {
-    type Target = CsharpObject;
+    type Target = Arc<CsharpObject>;
 
     fn deref(&self) -> &Self::Target {
         &self.class

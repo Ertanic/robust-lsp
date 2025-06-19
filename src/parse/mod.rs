@@ -4,8 +4,6 @@ use crate::{
 };
 use futures::future::join_all;
 use itertools::Itertools;
-use std::num::NonZero;
-use std::thread::available_parallelism;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -69,15 +67,9 @@ impl<'a> ProjectParser<'a> {
         let files_count = files.len();
         tracing::info!("{} files found", files_count);
 
-        let cpu = available_parallelism()
-            .unwrap_or(NonZero::new(4).unwrap())
-            .get()
-            / 2;
         let parser_status = Arc::new(Mutex::new(
             ParserHandler::new(files_count as u32, self.client.clone(), "project files").await,
         ));
-
-        tracing::info!("{} files will be parsed in {} threads", files_count, cpu);
 
         let results = join_all(files.into_iter().map(|f| {
             let parsed_files = self.context.parsed_files.clone();

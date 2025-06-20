@@ -1,5 +1,3 @@
-use crate::references::csharp::CsharpReferencesProvider;
-use crate::references::ReferencesProvider;
 use crate::{
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
@@ -10,7 +8,10 @@ use crate::{
         structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype},
         yaml, ParseResult, ProjectParser,
     },
+    references::csharp::CsharpReferencesProvider,
+    references::ReferencesProvider,
     utils::check_project_compliance,
+    utils::get_ext,
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
@@ -171,46 +172,26 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let path = match params.text_document.uri.to_file_path() {
-            Ok(p) => p,
-            Err(_) => {
-                tracing::warn!(
-                    "Failed to convert uri to path: {}.",
-                    params.text_document.uri
-                );
-                return;
-            }
-        };
-        let ext = path
-            .extension()
-            .unwrap_or_default()
-            .to_str()
-            .unwrap_or_default();
+        let path = params.text_document.uri.to_file_path().unwrap_or_default();
+        let ext = get_ext(&path);
 
         match ext {
             "cs" => {
                 let result = csharp::parse(path.clone(), self.context.parsed_files.clone()).await;
                 match result {
-                    ParseResult::Csharp(_) => {
-                        let ParseResult::Csharp(parsed_classes) = result else {
-                            tracing::warn!("Failed to parse C# prototypes while saving file.");
-                            return;
-                        };
-
+                    ParseResult::Csharp(parsed_classes) => {
                         let mut lock = self.context.classes.write().await;
                         let diff = lock
                             .par_iter()
-                            .filter(|c| c.index().0 == path)
-                            .filter(|c| !parsed_classes.contains(c))
+                            .filter(|c| c.index().0 == path && !parsed_classes.contains(c))
                             .cloned()
                             .collect::<Vec<_>>();
 
                         for class in parsed_classes {
-                            tracing::info!("New/changed class: {}", class.name);
                             lock.insert(Arc::new(class));
                         }
+
                         for class in diff {
-                            tracing::info!("Remove class: {}", class.name);
                             lock.remove(&class);
                         }
                     }
@@ -223,34 +204,19 @@ impl LanguageServer for Backend {
             "yml" | "yaml" => {
                 let result = yaml::parse(path.clone(), self.context.parsed_files.clone()).await;
                 match result {
-                    ParseResult::YamlPrototypes(_) => {
-                        let ParseResult::YamlPrototypes(parsed_prototypes) = result else {
-                            tracing::warn!("Failed to parse YAML prototypes while saving file.");
-                            return;
-                        };
+                    ParseResult::YamlPrototypes(parsed_prototypes) => {
                         let mut lock = self.context.prototypes.write().await;
                         let diff = lock
                             .par_iter()
-                            .filter(|p| p.index().0 == path)
-                            .filter(|p| !parsed_prototypes.contains(p))
+                            .filter(|p| p.index().0 == path && !parsed_prototypes.contains(p))
                             .cloned()
                             .collect::<Vec<_>>();
 
                         for proto in parsed_prototypes {
-                            tracing::info!(
-                                "New/changed prototype: {} with id {}",
-                                proto.prototype,
-                                proto.id
-                            );
                             lock.insert(Arc::new(proto));
                         }
 
                         for proto in diff {
-                            tracing::info!(
-                                "Remove prototype: {} with id {}",
-                                proto.prototype,
-                                proto.id
-                            );
                             lock.remove(&proto);
                         }
                     }
@@ -266,10 +232,8 @@ impl LanguageServer for Backend {
 
     #[rustfmt::skip]
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        tracing::trace!("Completion request has been received.");
-
         let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
-        let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
+        let extension = get_ext(&file);
 
         let root_path = self.root_uri.lock().await.as_ref().unwrap().to_file_path().unwrap_or_default();
 
@@ -298,10 +262,8 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        tracing::trace!("Goto definition request has been received.");
-
         let file = params.text_document_position_params.text_document.uri.to_file_path().unwrap_or_default();
-        let extension = file.extension().unwrap_or_default().to_str().unwrap_or_default();
+        let extension = get_ext(&file);
 
         match extension {
             "yml" | "yaml" => {
@@ -325,19 +287,13 @@ impl LanguageServer for Backend {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        tracing::trace!("References request has been received.");
-
         let file = params
             .text_document_position
             .text_document
             .uri
             .to_file_path()
             .unwrap_or_default();
-        let extension = file
-            .extension()
-            .unwrap_or_default()
-            .to_str()
-            .unwrap_or_default();
+        let extension = get_ext(&file);
 
         match extension {
             "cs" => {
@@ -367,14 +323,8 @@ impl LanguageServer for Backend {
         &self,
         params: InlayHintParams,
     ) -> Result<Option<Vec<tower_lsp::lsp_types::InlayHint>>> {
-        tracing::trace!("Inlay hint request has been received.");
-
         let file = params.text_document.uri.to_file_path().unwrap_or_default();
-        let extension = file
-            .extension()
-            .unwrap_or_default()
-            .to_str()
-            .unwrap_or_default();
+        let extension = get_ext(&file);
 
         match extension {
             "yml" | "yaml" => {

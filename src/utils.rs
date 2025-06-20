@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, path::Path, sync::Arc};
 use tower_lsp::{
     lsp_types::{
         notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString,
@@ -206,4 +206,11 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 
         (scol + 1, ecol - 1)
     }
+}
+
+pub fn get_ext(file: &Path) -> &str {
+    file.extension()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
 }

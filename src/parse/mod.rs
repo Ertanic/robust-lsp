@@ -1,5 +1,6 @@
 use crate::{
     backend::{Context, ParsedFiles},
+    utils::get_ext,
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use futures::future::join_all;
@@ -76,12 +77,7 @@ impl<'a> ProjectParser<'a> {
             let parser_status = parser_status.clone();
 
             tokio::spawn(async move {
-                let result = match f
-                    .extension()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default()
-                {
+                let result = match get_ext(&f) {
                     "cs" => csharp::parse(f, parsed_files.clone()).await,
                     "yml" => yaml::parse(f, parsed_files.clone()).await,
                     "ftl" => fluent::parse(f, parsed_files.clone()).await,

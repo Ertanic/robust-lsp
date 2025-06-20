@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{
     CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
 };
 use tracing::instrument;
-use tree_sitter::{Node, Parser, Point, Tree};
+use tree_sitter::{Node, Point, Tree};
 
 const SPRITES_RES_PATH: &str = "Resources/Textures/";
 
@@ -25,7 +25,7 @@ pub struct YamlCompletion {
     context: Arc<Context>,
     position: Position,
     src: String,
-    tree: Tree,
+    tree: Arc<Tree>,
     root_path: PathBuf,
 }
 
@@ -78,12 +78,14 @@ impl Completion for YamlCompletion {
 }
 
 impl YamlCompletion {
-    pub fn new(context: Arc<Context>, position: Position, src: &Rope, root_path: PathBuf) -> Self {
+    pub fn new(
+        context: Arc<Context>,
+        position: Position,
+        src: &Rope,
+        tree: Arc<Tree>,
+        root_path: PathBuf,
+    ) -> Self {
         let src = src.to_string();
-
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_yaml::language()).unwrap();
-        let tree = parser.parse(&src, None).unwrap();
 
         Self {
             context,

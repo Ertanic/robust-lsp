@@ -15,13 +15,13 @@ use crate::{
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
+use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
 };
 use tokio::sync::{Mutex, RwLock};
-use tower_lsp::lsp_types::{Location, ReferenceParams};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
@@ -31,10 +31,11 @@ use tower_lsp::{
         InlayHintParams, MessageType, OneOf::Left, ServerCapabilities, TextDocumentSyncCapability,
         TextDocumentSyncKind, Url,
     },
+    lsp_types::{Location, ReferenceParams},
     Client, LanguageServer,
 };
 use tracing::instrument;
-use tree_sitter::Tree;
+use tree_sitter::{Parser, Tree};
 
 pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
 pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;
@@ -49,9 +50,14 @@ pub struct Context {
     pub locales: FluentLocales,
 }
 
+struct OpenedFile {
+    pub rope: Arc<RwLock<Rope>>,
+    pub tree: Arc<Tree>,
+}
+
 pub(crate) struct Backend {
     client: Arc<Client>,
-    opened_files: RwLock<HashMap<Url, Rope>>,
+    opened_files: RwLock<HashMap<Url, OpenedFile>>,
     context: Arc<Context>,
     root_uri: Arc<Mutex<Option<Url>>>,
 }
@@ -117,52 +123,113 @@ impl LanguageServer for Backend {
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return;
-        };
+        let path = params.text_document.uri.to_file_path().unwrap_or_default();
 
-        if !path.is_file() {
-            return;
-        }
+        let tree = self
+            .context
+            .parsed_files
+            .read()
+            .await
+            .get(&path)
+            .map(Arc::clone);
 
-        match std::fs::File::open(&path) {
-            Ok(handler) => {
-                let rope = Rope::from_reader(handler).unwrap();
-                self.opened_files
-                    .write()
-                    .await
-                    .insert(params.text_document.uri, rope);
-                tracing::trace!("Document has been cached.");
-            }
-            Err(err) => {
-                tracing::trace!("File can't be opened: {}", err);
-            }
+        if let Some(tree) = tree {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            let rope = Arc::new(RwLock::new(Rope::from(content)));
+            let opened_file = OpenedFile { rope, tree };
+
+            self.opened_files
+                .write()
+                .await
+                .insert(params.text_document.uri, opened_file);
+
+            tracing::trace!("Document has been cached.");
+        } else {
+            tracing::trace!("File can't be cached.");
         }
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let mut lock = self.opened_files.write().await;
-        let found_rope = lock.get_mut(&params.text_document.uri);
+        let opened_files_guard = self.opened_files.read().await;
+        let found_rope = opened_files_guard.get(&params.text_document.uri);
 
         match found_rope {
-            Some(rope) => {
+            Some(OpenedFile { rope, tree }) => {
+                let mut rope_guard = rope.write().await;
+
                 for change in params.content_changes {
                     if let Some(range) = change.range {
-                        let start_idx = rope.line_to_char(range.start.line as usize)
+                        let start_idx = rope_guard.line_to_char(range.start.line as usize)
                             + range.start.character as usize;
-                        let end_idx = rope.line_to_char(range.end.line as usize)
+                        let end_idx = rope_guard.line_to_char(range.end.line as usize)
                             + range.end.character as usize;
 
-                        if let Err(err) = rope.try_remove(start_idx..end_idx) {
+                        if let Err(err) = rope_guard.try_remove(start_idx..end_idx) {
                             tracing::warn!("Failed to remove text from document: {}.", err);
                         };
-                        if let Err(err) = rope.try_insert(start_idx, &change.text) {
+                        if let Err(err) = rope_guard.try_insert(start_idx, &change.text) {
                             tracing::warn!("Failed to insert text into document: {}.", err);
                         }
 
                         tracing::trace!("Document has been changed.");
                     }
+                }
+
+                let mut parser = Parser::new();
+                let path = params.text_document.uri.to_file_path().unwrap_or_default();
+                match get_ext(&path) {
+                    "cs" => {
+                        parser
+                            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+                            .unwrap();
+
+                        let new_tree = parser.parse(rope_guard.to_string(), Some(tree.deref()));
+
+                        if let Some(new_tree) = new_tree {
+                            let tree = Arc::new(new_tree);
+                            let rope = Arc::clone(rope);
+                            let opened_file = OpenedFile {
+                                rope,
+                                tree: Arc::clone(&tree),
+                            };
+
+                            drop(rope_guard);
+                            drop(opened_files_guard);
+
+                            self.opened_files
+                                .write()
+                                .await
+                                .insert(params.text_document.uri, opened_file);
+
+                            self.context.parsed_files.write().await.insert(path, tree);
+                        }
+                    }
+                    "yaml" | "yml" => {
+                        parser.set_language(&tree_sitter_yaml::language()).unwrap();
+
+                        let new_tree = parser.parse(rope_guard.to_string(), Some(tree.deref()));
+
+                        if let Some(new_tree) = new_tree {
+                            let tree = Arc::new(new_tree);
+                            let rope = Arc::clone(rope);
+                            let opened_file = OpenedFile {
+                                rope,
+                                tree: Arc::clone(&tree),
+                            };
+
+                            drop(rope_guard);
+                            drop(opened_files_guard);
+
+                            self.opened_files
+                                .write()
+                                .await
+                                .insert(params.text_document.uri, opened_file);
+
+                            self.context.parsed_files.write().await.insert(path, tree);
+                        }
+                    }
+                    _ => {}
                 }
             }
             None => {
@@ -240,14 +307,19 @@ impl LanguageServer for Backend {
         match extension {
             "yml" | "yaml" => {
                 let opened = self.opened_files.read().await;
-                let rope = opened.get(&params.text_document_position.text_document.uri);
+                let opened_file = opened.get(&params.text_document_position.text_document.uri);
 
-                match rope {
-                    Some(rope) => {
-                        let completion = YamlCompletion::new(self.context.clone(), params.text_document_position.position, rope, root_path);
+                if let Some(OpenedFile { rope, tree }) = opened_file {
+                    let completion = YamlCompletion::new(
+                            self.context.clone(),
+                            params.text_document_position.position,
+                            rope.read().await.deref(),
+                            Arc::clone(tree),
+                            root_path
+                        );
                         Ok(completion.completion())
-                    },
-                    None => Ok(None)
+                } else  {
+                    Ok(None)
                 }
             },
             _ => {
@@ -268,18 +340,21 @@ impl LanguageServer for Backend {
         match extension {
             "yml" | "yaml" => {
                 let opened = self.opened_files.read().await;
-                let rope = opened.get(&params.text_document_position_params.text_document.uri);
+                let opened_file = opened.get(&params.text_document_position_params.text_document.uri);
 
-                match rope {
-                    Some(rope) => {
-                        let root = self.root_uri.lock().await.as_ref().unwrap().to_file_path().unwrap_or_default();
-                        let definition = YamlGotoDefinition::new(self.context.clone(), params.text_document_position_params.position, rope, root);
-                        Ok(definition.goto_definition())
-                    }
-                    None => {
-                        tracing::trace!("File wasn't cached.");
-                        Ok(None)
-                    }
+                if let Some(OpenedFile { rope, tree }) = opened_file {
+                    let root = self.root_uri.lock().await.as_ref().unwrap().to_file_path().unwrap_or_default();
+                    let definition = YamlGotoDefinition::new(
+                        self.context.clone(),
+                        params.text_document_position_params.position,
+                        rope.read().await.deref(),
+                        Arc::clone(tree),
+                        root,
+                    );
+                    Ok(definition.goto_definition())
+                } else {
+                    tracing::trace!("File wasn't cached.");
+                    Ok(None)
                 }
             }
             _ => Ok(None)
@@ -298,21 +373,19 @@ impl LanguageServer for Backend {
         match extension {
             "cs" => {
                 let opened = self.opened_files.read().await;
-                let rope = opened.get(&params.text_document_position.text_document.uri);
+                let opened_file = opened.get(&params.text_document_position.text_document.uri);
 
-                match rope {
-                    Some(rope) => {
-                        let provider = CsharpReferencesProvider::new(
-                            self.context.clone(),
-                            params.text_document_position.position,
-                            rope,
-                        );
-                        Ok(provider.get_references())
-                    }
-                    None => {
-                        tracing::trace!("File wasn't cached.");
-                        Ok(None)
-                    }
+                if let Some(OpenedFile { rope, tree }) = opened_file {
+                    let provider = CsharpReferencesProvider::new(
+                        self.context.clone(),
+                        params.text_document_position.position,
+                        rope.read().await.deref(),
+                        Arc::clone(tree),
+                    );
+                    Ok(provider.get_references())
+                } else {
+                    tracing::trace!("File wasn't cached.");
+                    Ok(None)
                 }
             }
             _ => Ok(None),
@@ -329,18 +402,19 @@ impl LanguageServer for Backend {
         match extension {
             "yml" | "yaml" => {
                 let opened = self.opened_files.read().await;
-                let rope = opened.get(&params.text_document.uri);
+                let opened_file = opened.get(&params.text_document.uri);
 
-                match rope {
-                    Some(rope) => {
-                        let hint =
-                            YamlInlayHint::new(self.context.classes.clone(), params.range, rope);
-                        Ok(hint.inlay_hint())
-                    }
-                    None => {
-                        tracing::trace!("File wasn't cached.");
-                        Ok(None)
-                    }
+                if let Some(OpenedFile { rope, tree }) = opened_file {
+                    let hint = YamlInlayHint::new(
+                        self.context.classes.clone(),
+                        params.range,
+                        rope.read().await.deref(),
+                        Arc::clone(tree),
+                    );
+                    Ok(hint.inlay_hint())
+                } else {
+                    tracing::trace!("File wasn't cached.");
+                    Ok(None)
                 }
             }
             _ => Ok(None),

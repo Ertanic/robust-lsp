@@ -26,14 +26,14 @@ pub(crate) type Result<T, E = ()> = std::result::Result<T, E>;
 #[inline(always)]
 fn get_folders(root: &Path) -> Vec<PathBuf> {
     vec![
-        "RobustToolbox/Robust.Client",
-        "RobustToolbox/Robust.Server",
-        "RobustToolbox/Robust.Shared",
-        "Content.Client",
-        "Content.Server",
-        "Content.Shared",
-        "Resources/Prototypes",
-        "Resources/Locale",
+        PathBuf::from("RobustToolbox").join("Robust.Client"),
+        PathBuf::from("RobustToolbox").join("Robust.Server"),
+        PathBuf::from("RobustToolbox").join("Robust.Shared"),
+        PathBuf::from("Content.Client"),
+        PathBuf::from("Content.Server"),
+        PathBuf::from("Content.Shared"),
+        PathBuf::from("Resources").join("Prototypes"),
+        PathBuf::from("Resources").join("Locale"),
     ]
     .into_iter()
     .map(|f| root.join(f))

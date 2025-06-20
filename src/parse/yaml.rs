@@ -23,11 +23,12 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
     };
 
     if let Some(tree) = tree {
-        if let Some(old_tree) = old_tree {
-            let old_tree = Arc::clone(old_tree);
-            drop(lock);
-            parsed_files.write().await.insert(path.clone(), old_tree);
-        }
+        let tree = Arc::new(tree);
+        drop(lock);
+        parsed_files
+            .write()
+            .await
+            .insert(path.clone(), Arc::clone(&tree));
 
         let root_node = tree.root_node();
         if let Some(block_sequence_node) = get_block_sequence_node(&root_node) {

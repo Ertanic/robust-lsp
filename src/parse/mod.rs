@@ -1,5 +1,6 @@
 use crate::{
     backend::{Context, ParsedFiles},
+    utils::get_ext,
     utils::{percentage, ProgressStatus, ProgressStatusInit},
 };
 use futures::future::join_all;
@@ -25,14 +26,14 @@ pub(crate) type Result<T, E = ()> = std::result::Result<T, E>;
 #[inline(always)]
 fn get_folders(root: &Path) -> Vec<PathBuf> {
     vec![
-        "RobustToolbox/Robust.Client",
-        "RobustToolbox/Robust.Server",
-        "RobustToolbox/Robust.Shared",
-        "Content.Client",
-        "Content.Server",
-        "Content.Shared",
-        "Resources/Prototypes",
-        "Resources/Locale",
+        PathBuf::from("RobustToolbox").join("Robust.Client"),
+        PathBuf::from("RobustToolbox").join("Robust.Server"),
+        PathBuf::from("RobustToolbox").join("Robust.Shared"),
+        PathBuf::from("Content.Client"),
+        PathBuf::from("Content.Server"),
+        PathBuf::from("Content.Shared"),
+        PathBuf::from("Resources").join("Prototypes"),
+        PathBuf::from("Resources").join("Locale"),
     ]
     .into_iter()
     .map(|f| root.join(f))
@@ -76,12 +77,7 @@ impl<'a> ProjectParser<'a> {
             let parser_status = parser_status.clone();
 
             tokio::spawn(async move {
-                let result = match f
-                    .extension()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default()
-                {
+                let result = match get_ext(&f) {
                     "cs" => csharp::parse(f, parsed_files.clone()).await,
                     "yml" => yaml::parse(f, parsed_files.clone()).await,
                     "ftl" => fluent::parse(f, parsed_files.clone()).await,

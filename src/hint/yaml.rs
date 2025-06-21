@@ -1,11 +1,10 @@
-use std::ops::Deref;
-use std::sync::Arc;
 use super::InlayHint;
 use crate::{backend::CsharpObjects, parse::structs::csharp::ReflectionManager, utils::block};
 use ropey::Rope;
+use std::sync::Arc;
 use stringcase::camel_case;
 use tower_lsp::lsp_types::{InlayHintKind, InlayHintLabel, Position, Range};
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 
 type YamlInlayHintResult = Option<Vec<tower_lsp::lsp_types::InlayHint>>;
 
@@ -19,7 +18,7 @@ pub struct YamlInlayHint {
     classes: CsharpObjects,
     range: Range,
     src: String,
-    tree: Tree,
+    tree: Arc<Tree>,
 }
 
 impl InlayHint for YamlInlayHint {
@@ -59,12 +58,8 @@ impl InlayHint for YamlInlayHint {
 }
 
 impl YamlInlayHint {
-    pub fn new(classes: CsharpObjects, range: Range, rope: &Rope) -> Self {
+    pub fn new(classes: CsharpObjects, range: Range, rope: &Rope, tree: Arc<Tree>) -> Self {
         let src = rope.to_string();
-
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_yaml::language()).unwrap();
-        let tree = parser.parse(&src, None).unwrap();
 
         Self {
             classes,

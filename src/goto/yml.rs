@@ -16,13 +16,13 @@ use std::{path::PathBuf, sync::Arc};
 use stringcase::camel_case;
 use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{self, GotoDefinitionResponse, Location, LocationLink, Position, Url};
-use tree_sitter::{Node, Parser, Point, Tree};
+use tree_sitter::{Node, Point, Tree};
 
 pub struct YamlGotoDefinition {
     context: Arc<Context>,
     position: Position,
     src: String,
-    tree: Tree,
+    tree: Arc<Tree>,
     project_root: PathBuf,
 }
 
@@ -56,13 +56,10 @@ impl YamlGotoDefinition {
         context: Arc<Context>,
         position: Position,
         rope: &Rope,
+        tree: Arc<Tree>,
         project_root: PathBuf,
     ) -> Self {
         let src = rope.to_string();
-
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_yaml::language()).unwrap();
-        let tree = parser.parse(&src, None).unwrap();
 
         Self {
             context,

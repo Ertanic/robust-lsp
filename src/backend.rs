@@ -10,14 +10,16 @@ use crate::{
     },
     references::csharp::CsharpReferencesProvider,
     references::ReferencesProvider,
+    semantic::fluent::SemanticAnalyzer,
     utils::check_project_compliance,
     utils::get_ext,
 };
+use fluent_syntax::ast::Entry;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
-use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     path::PathBuf,
     sync::Arc,
 };
@@ -28,14 +30,19 @@ use tower_lsp::{
         CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
         GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams,
-        InlayHintParams, MessageType, OneOf::Left, ServerCapabilities, TextDocumentSyncCapability,
-        TextDocumentSyncKind, Url,
+        InlayHintParams, Location, MessageType, OneOf::Left, ReferenceParams, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     },
-    lsp_types::{Location, ReferenceParams},
+    lsp_types::{SemanticTokenType, SemanticTokens, SemanticTokensLegend},
+    lsp_types::{
+        SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams,
+        SemanticTokensResult, SemanticTokensServerCapabilities,
+    },
     Client, LanguageServer,
 };
 use tracing::instrument;
 use tree_sitter::{Parser, Tree};
+use crate::semantic::fluent::to_relative_semantic_tokens;
 
 pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
 pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;
@@ -100,6 +107,27 @@ impl LanguageServer for Backend {
                 definition_provider: Some(Left(true)),
                 inlay_hint_provider: Some(Left(true)),
                 references_provider: Some(Left(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            legend: SemanticTokensLegend {
+                                token_types: vec![
+                                    SemanticTokenType::new("enumMember"),
+                                    SemanticTokenType::new("string"),
+                                    SemanticTokenType::new("comment"),
+                                    SemanticTokenType::new("number"),
+                                    SemanticTokenType::new("function"),
+                                    SemanticTokenType::new("operator"),
+                                    SemanticTokenType::new("variable"),
+                                    SemanticTokenType::new("parameter"),
+                                ],
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    ),
+                ),
                 ..Default::default()
             },
         })
@@ -419,6 +447,52 @@ impl LanguageServer for Backend {
             }
             _ => Ok(None),
         }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let path = params.text_document.uri.to_file_path().unwrap_or_default();
+
+        if get_ext(&path) != "ftl" {
+            tracing::trace!("Not .ftl file");
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let resource =
+            fluent_syntax::parser::parse(content.as_str()).unwrap_or_else(|(res, errors)| {
+                tracing::warn!("{:?}", errors);
+                res
+            });
+
+        let values = resource
+            .body
+            .into_iter()
+            .inspect(|msg| tracing::trace!("Message: {:?}", msg))
+            .filter_map(|e| {
+                let analyzer = SemanticAnalyzer::new(&content);
+                match e {
+                    Entry::Message(msg) => Some(analyzer.message_to_semantic(msg)),
+                    Entry::Comment(comment)
+                    | Entry::GroupComment(comment)
+                    | Entry::ResourceComment(comment) => {
+                        Some(vec![analyzer.comment_to_semantic(comment)])
+                    }
+                    Entry::Term(term) => Some(analyzer.term_to_semantic(term)),
+                    _ => None,
+                }
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
+        let relative_tokens = to_relative_semantic_tokens(values);
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            data: relative_tokens,
+            ..Default::default()
+        })))
     }
 
     async fn shutdown(&self) -> Result<()> {

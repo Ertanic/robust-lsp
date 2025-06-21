@@ -11,6 +11,7 @@ mod log;
 mod parse;
 mod utils;
 mod references;
+mod semantic;
 
 #[tokio::main]
 async fn main() {

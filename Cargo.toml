@@ -1,16 +1,12 @@
 [package]
 name = "robust-lsp"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 
 [dependencies]
-async-scoped = { version = "0.9.0", features = ["use-tokio"] }
 clap = { version = "4.5.20", features = ["cargo"] }
-fluent-syntax = { git = "https://github.com/Ertanic/fluent-rs", branch = "span", features = [
-    "spans",
-], package = "fluent-syntax" }
+fluent-syntax = { git = "https://github.com/Ertanic/fluent-rs", features = ["spans"], rev = "adae4a04e491846b5bd22b605c669812473395a4" }
 futures = "0.3.31"
-globset = "0.4.15"
 rayon = "1.10.0"
 ropey = "1.6.1"
 serde = { version = "1.0.214", features = ["derive"] }
@@ -26,9 +22,6 @@ tree-sitter-c-sharp = "0.23.0"
 tree-sitter-yaml = "0.6.1"
 walkdir = "2.5.0"
 itertools = "0.13"
-
-[build-dependencies]
-cc = "1.1.23"
 
 [profile.dev]
 debug = 2

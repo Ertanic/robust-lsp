@@ -104,7 +104,7 @@ export async function activate(context: ExtensionContext) {
 			documentSelector: [
 				{ scheme: "file", language: "csharp" },
 				{ scheme: "file", language: "yaml" },
-				{ scheme: "file", language: "fluent", pattern: "**/*.ftl" },
+				{ scheme: "file", pattern: "**/*.ftl" },
 			],
 		};
 

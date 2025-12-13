@@ -79,9 +79,9 @@ impl<'a> ProjectParser<'a> {
 
             tokio::spawn(async move {
                 let result: ParseResult = match get_ext(&f) {
-                    "cs" => csharp::parse(f, parsed_files.clone(), cache).await,
-                    "yml" => yaml::parse(f, parsed_files.clone()).await,
-                    "ftl" => fluent::parse(f, parsed_files.clone()).await,
+                    "cs" => csharp::parse(f, parsed_files, cache).await,
+                    "yml" => yaml::parse(f, parsed_files, cache).await,
+                    "ftl" => fluent::parse(f, cache).await,
                     _ => ParseResult::None,
                 };
 
@@ -179,17 +179,19 @@ impl ParserHandler {
         } else {
             let percent = percentage(self.actual_count, self.total_count);
 
-            self.status
-                .lock()
-                .await
-                .next_state(
-                    percent,
-                    Some(format!(
-                        "{}/{} ({percent}%)",
-                        self.actual_count, self.total_count
-                    )),
-                )
-                .await;
+            if self.actual_count.is_multiple_of(100) {
+                self.status
+                    .lock()
+                    .await
+                    .next_state(
+                        percent,
+                        Some(format!(
+                            "{}/{} ({percent}%)",
+                            self.actual_count, self.total_count
+                        )),
+                    )
+                    .await;
+            }
         }
     }
 

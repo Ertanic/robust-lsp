@@ -1,12 +1,24 @@
-use super::{common::DefinitionIndex, structs::fluent::FluentKey, ParsedFiles};
-use crate::parse::ParseResult;
+use super::{common::DefinitionIndex, structs::fluent::FluentKey};
+use crate::cache::{CacheContent, CacheContext, CacheKey};
+use crate::utils::{read_file, span_to_range, FileContent};
+use crate::{cache::ProjectCache, parse::ParseResult};
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
-use std::{collections::HashSet, path::PathBuf};
-use crate::utils::span_to_range;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use tokio::sync::RwLock;
 
-pub async fn parse(path: PathBuf, _parsed_files: ParsedFiles) -> ParseResult {
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let Ok(resource) = fluent_syntax::parser::parse(content.as_ref()) else {
+pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
+    let FileContent { hash, content } = match read_file(&path).await {
+        Some(content) => content,
+        None => return ParseResult::None,
+    };
+
+    let key = CacheKey::new(hash);
+    if let CacheContent::Fluent(cache) = cache.read().await.get(&key, CacheContext::Fluent) {
+        return ParseResult::Fluent(cache.clone());
+    }
+
+    let content = Arc::new(content);
+    let Ok(resource) = fluent_syntax::parser::parse(&**content) else {
         return ParseResult::None;
     };
 
@@ -46,6 +58,11 @@ pub async fn parse(path: PathBuf, _parsed_files: ParsedFiles) -> ParseResult {
             FluentKey::new(msg.id.name.to_string(), args, index)
         })
         .collect();
+
+    cache
+        .write()
+        .await
+        .insert(key, CacheContent::Fluent(&keys));
 
     ParseResult::Fluent(keys)
 }

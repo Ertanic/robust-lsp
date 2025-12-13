@@ -1,17 +1,36 @@
 use super::{common::DefinitionIndex, structs::yaml::YamlPrototype, ParsedFiles};
-use crate::parse::ParseResult;
+use crate::{
+    cache::{CacheContent, CacheContext, CacheKey, ProjectCache},
+    parse::ParseResult,
+    utils::{read_file, FileContent},
+};
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tree_sitter::{Node, Range};
 
-pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
+pub async fn parse(
+    path: PathBuf,
+    parsed_files: ParsedFiles,
+    cache: Arc<RwLock<ProjectCache>>,
+) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_yaml::language())
         .expect("Failed to load YAML grammar");
 
-    let src = Arc::new(std::fs::read_to_string(&path).expect("file cannot be read"));
+    let FileContent { hash, content } = match read_file(&path).await {
+        Some(content) => content,
+        None => return ParseResult::None,
+    };
+
+    let key = CacheKey::new(hash);
+    if let CacheContent::Yaml(cache) = cache.read().await.get(&key, CacheContext::Yaml) {
+        return ParseResult::YamlPrototypes(cache.clone());
+    }
+
+    let src = Arc::new(content);
 
     let lock = parsed_files.read().await;
     let old_tree = lock.get(&path);
@@ -44,6 +63,12 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
                     protos.push(prototype);
                 }
             }
+
+            cache
+                .write()
+                .await
+                .insert(key, CacheContent::Yaml(&protos));
+
             return ParseResult::YamlPrototypes(protos);
         }
     }

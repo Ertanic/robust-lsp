@@ -318,7 +318,12 @@ impl LanguageServer for Backend {
                 }
             }
             "yml" | "yaml" => {
-                let result = yaml::parse(path.clone(), self.context.parsed_files.clone()).await;
+                let result = yaml::parse(
+                    path.clone(),
+                    self.context.parsed_files.clone(),
+                    self.context.cache.clone(),
+                )
+                .await;
                 match result {
                     ParseResult::YamlPrototypes(parsed_prototypes) => {
                         let mut lock = self.context.prototypes.write().await;

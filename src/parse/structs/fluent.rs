@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use bincode::{Decode, Encode};
 use crate::parse::common::{DefinitionIndex, Index};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Encode, Decode)]
 pub struct FluentKey {
     pub key: String,
     pub args: std::collections::HashSet<String>,

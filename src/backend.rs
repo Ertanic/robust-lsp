@@ -1,3 +1,4 @@
+use crate::cache::ProjectCache;
 use crate::{
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
@@ -18,6 +19,7 @@ use ropey::Rope;
 use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
+    env,
     path::PathBuf,
     sync::Arc,
 };
@@ -44,6 +46,7 @@ pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Tree>>>>;
 
 #[derive(Default)]
 pub struct Context {
+    pub cache: Arc<RwLock<ProjectCache>>,
     pub parsed_files: ParsedFiles,
     pub classes: CsharpObjects,
     pub prototypes: YamlPrototypes,
@@ -117,8 +120,21 @@ impl LanguageServer for Backend {
             .to_file_path()
             .expect("invalid path");
 
+        let app = env::current_exe()
+            .expect("unable to get program path")
+            .parent()
+            .expect("invalid path")
+            .to_path_buf();
+
+        // replace the default cache
+        let mut cache = self.context.cache.write().await;
+        *cache = ProjectCache::new(&root_path, &app).await;
+        drop(guard); // release the guard so that there is no deadlock
+
         let parser = ProjectParser::new(&root_path, self.context.clone(), self.client.clone());
         parser.parse().await;
+
+        self.context.cache.read().await.write().await;
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
@@ -244,7 +260,12 @@ impl LanguageServer for Backend {
 
         match ext {
             "cs" => {
-                let result = csharp::parse(path.clone(), self.context.parsed_files.clone()).await;
+                let result = csharp::parse(
+                    path.clone(),
+                    self.context.parsed_files.clone(),
+                    self.context.cache.clone(),
+                )
+                .await;
                 match result {
                     ParseResult::Csharp(parsed_classes) => {
                         let mut lock = self.context.classes.write().await;

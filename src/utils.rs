@@ -1,4 +1,6 @@
+use sha2::{Digest, Sha256};
 use std::{future::Future, path::Path, sync::Arc};
+use tokio::io::{AsyncReadExt, BufReader};
 use tower_lsp::{
     lsp_types::{
         notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString,
@@ -7,7 +9,7 @@ use tower_lsp::{
     },
     Client,
 };
-use tracing::instrument;
+use tracing::{error, instrument};
 
 pub fn check_project_compliance(params: &InitializeParams) -> bool {
     if let Some(root_uri) = params.root_uri.as_ref() {
@@ -213,4 +215,41 @@ pub fn get_ext(file: &Path) -> &str {
         .unwrap_or_default()
         .to_str()
         .unwrap_or_default()
+}
+
+pub struct FileContent {
+    pub hash: String,
+    pub content: String,
+}
+
+pub async fn read_file(path: impl AsRef<Path>) -> Option<FileContent> {
+    let file = tokio::fs::File::open(path.as_ref()).await;
+    match file {
+        Ok(file) => {
+            let mut content = String::with_capacity(4096);
+            let mut reader = BufReader::new(file);
+            let mut buf = [0u8; 4096];
+            let mut hasher = Sha256::new();
+            loop {
+                let n = reader.read(&mut buf).await.ok()?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                content.push_str(str::from_utf8(&buf[..n]).ok()?);
+            }
+
+            let hash = hex::encode(hasher.finalize());
+            let file_content = FileContent { hash, content };
+
+            Some(file_content)
+        }
+        Err(err) => {
+            error!(
+                "unable to open file {} due to error: {err:?}",
+                path.as_ref().display()
+            );
+            None
+        }
+    }
 }

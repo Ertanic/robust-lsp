@@ -1,7 +1,8 @@
 use crate::parse::common::{DefinitionIndex, Index};
 use std::hash::Hash;
+use bincode::{Decode, Encode};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Encode, Decode)]
 pub struct YamlPrototype {
     pub prototype: String,
     pub id: String,

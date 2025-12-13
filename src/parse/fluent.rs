@@ -39,7 +39,7 @@ pub async fn parse(path: PathBuf, _parsed_files: ParsedFiles) -> ParseResult {
                 .collect::<HashSet<String>>();
 
             let range = span_to_range(&content, &msg.id.span);
-            let index = DefinitionIndex(path.clone(), Some(range));
+            let index = DefinitionIndex(path.clone(), Some(range.into()));
 
             FluentKey::new(msg.id.name.to_string(), args, index)
         })

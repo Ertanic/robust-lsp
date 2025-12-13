@@ -3,7 +3,7 @@ use crate::parse::ParseResult;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tree_sitter::Node;
+use tree_sitter::{Node, Range};
 
 pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
@@ -124,7 +124,7 @@ fn get_yaml_prototype(
                 return Some(YamlPrototype::new(
                     prototype,
                     id,
-                    DefinitionIndex(path.clone(), id_range),
+                    DefinitionIndex(path.clone(), id_range.map(Range::into)),
                 ))
             }
             _ => return None,

@@ -12,7 +12,7 @@ use std::{
 use structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype};
 use tokio::sync::Mutex;
 use tower_lsp::Client;
-use tracing::instrument;
+use tracing::{info, instrument};
 use walkdir::{DirEntry, WalkDir};
 
 pub mod common;
@@ -75,10 +75,11 @@ impl<'a> ProjectParser<'a> {
         let results = join_all(files.into_iter().map(|f| {
             let parsed_files = self.context.parsed_files.clone();
             let parser_status = parser_status.clone();
+            let cache = self.context.cache.clone();
 
             tokio::spawn(async move {
-                let result = match get_ext(&f) {
-                    "cs" => csharp::parse(f, parsed_files.clone()).await,
+                let result: ParseResult = match get_ext(&f) {
+                    "cs" => csharp::parse(f, parsed_files.clone(), cache).await,
                     "yml" => yaml::parse(f, parsed_files.clone()).await,
                     "ftl" => fluent::parse(f, parsed_files.clone()).await,
                     _ => ParseResult::None,

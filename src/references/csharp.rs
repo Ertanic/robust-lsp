@@ -66,17 +66,17 @@ impl CsharpReferencesProvider {
                 let index = p.index();
                 let uri = Url::from_file_path(index.0.clone())
                     .expect("Can't get location from file path");
-                let range = index.1.expect("Can't get location from index");
+                let range = index.1.clone().expect("Can't get location from index");
                 Location::new(
                     uri,
                     lsp_types::Range {
                         start: lsp_types::Position {
-                            line: range.start_point.row as u32,
-                            character: range.start_point.column as u32,
+                            line: range.start_point.start as u32,
+                            character: range.start_point.end as u32,
                         },
                         end: Position {
-                            line: range.end_point.row as u32,
-                            character: range.end_point.column as u32,
+                            line: range.end_point.start as u32,
+                            character: range.end_point.end as u32,
                         },
                     },
                 )

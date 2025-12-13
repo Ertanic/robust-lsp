@@ -7,12 +7,17 @@ use super::{
     ParseResult,
 };
 use crate::backend::ParsedFiles;
+use crate::cache::{CacheContent, CacheContext, CacheKey, ProjectCache};
+use crate::parse::common::IndexRange;
+use crate::utils::{read_file, FileContent};
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tokio::sync::{Mutex, RwLock};
+use tracing::info;
 use tree_sitter::Node;
 
 static PROTOTYPE_ATTR_ARGS: &[&str] = &["type", "loadPriority"];
@@ -28,26 +33,41 @@ static ID_DATA_FIELD_ATTR_ARGS: &[&str] = &["priority", "customTypeSerializer"];
 
 type Result<T, E = ()> = std::result::Result<T, E>;
 
-pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
+pub async fn parse(
+    path: PathBuf,
+    parsed_files: ParsedFiles,
+    cache: Arc<RwLock<ProjectCache>>,
+) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
         .expect("Failed to load C# grammar");
 
-    let src = Arc::new(std::fs::read_to_string(&path).expect("file cannot be read"));
+    let FileContent { hash, content } = match read_file(&path).await {
+        Some(content) => content,
+        None => return ParseResult::None,
+    };
+
+    let key = CacheKey::new(hash);
+    if let CacheContent::Csharp(cache) = cache.read().await.get(&key, CacheContext::Csharp) {
+        return ParseResult::Csharp(cache.clone());
+    }
+
+    let src = Arc::new(content);
 
     let lock = parsed_files.read().await;
     let old_tree = lock.get(&path);
 
     let tree = if let Some(old_tree) = old_tree {
-        parser.parse(src.deref(), Some(old_tree.deref()))
+        let tree = parser.parse(src.deref(), Some(old_tree.deref()));
+        drop(lock);
+        tree
     } else {
         parser.parse(src.deref(), None)
     };
-
+    
     if let Some(tree) = tree {
         let tree = Arc::new(tree);
-        drop(lock);
         parsed_files
             .write()
             .await
@@ -71,6 +91,11 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
                 stack.push(node.named_child(i).unwrap());
             }
         }
+
+        cache
+            .write()
+            .await
+            .insert(key, CacheContent::Csharp(&objects));
 
         return ParseResult::Csharp(objects);
     }
@@ -137,7 +162,7 @@ impl ParseFromNode for CsharpObject {
                 attributes,
                 fields,
                 modifiers,
-                DefinitionIndex(path.to_path_buf(), name_range),
+                DefinitionIndex(path.to_path_buf(), name_range.map(IndexRange::from)),
             )),
             _ => Err(()),
         }
@@ -217,7 +242,7 @@ impl ParseFromNode for CsharpClassField {
                 type_name,
                 attributes,
                 modifiers,
-                DefinitionIndex(path.to_path_buf(), name_range),
+                DefinitionIndex(path.to_path_buf(), name_range.map(IndexRange::from)),
             )),
             _ => Err(()),
         }

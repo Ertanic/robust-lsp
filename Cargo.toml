@@ -1,6 +1,6 @@
 [package]
 name = "robust-lsp"
-version = "0.9.0"
+version = "0.12.0"
 edition = "2021"
 
 [dependencies]
@@ -26,6 +26,10 @@ tree-sitter-c-sharp = "0.23.0"
 tree-sitter-yaml = "0.6.1"
 walkdir = "2.5.0"
 itertools = "0.13"
+bincode = { version = "2.0.1", features = ["serde"] }
+sha2 = "0.10.9"
+hex = "0.4.3"
+log = "0.4.22"
 
 [build-dependencies]
 cc = "1.1.23"

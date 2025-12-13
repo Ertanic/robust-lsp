@@ -4,6 +4,7 @@ use super::*;
 use crate::backend::CsharpObjects;
 use common::{DefinitionIndex, Index};
 use std::sync::Arc;
+use bincode::{Decode, Encode};
 use tree_sitter::Range;
 
 pub struct ReflectionManager {
@@ -78,7 +79,7 @@ impl ReflectionManager {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Encode, Decode)]
 pub struct CsharpAttributeCollection {
     pub attributes: Vec<CsharpAttribute>,
 }
@@ -226,7 +227,7 @@ impl Deref for Prototype {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Encode, Decode)]
 pub struct CsharpObject {
     pub name: String,
     pub base: Vec<String>,
@@ -290,20 +291,20 @@ impl Index for CsharpObject {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub struct CsharpAttribute {
     pub name: String,
     pub arguments: HashMap<String, CsharpAttributeArgument>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub struct CsharpAttributeArgument {
     pub index: usize,
     pub name: String,
     pub value: CsharpAttributeArgumentType,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub enum CsharpAttributeArgumentType {
     #[default]
     None,
@@ -319,7 +320,7 @@ pub enum CsharpAttributeArgumentType {
     },
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub struct CsharpClassField {
     pub name: String,
     pub type_name: String,

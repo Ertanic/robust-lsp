@@ -465,13 +465,13 @@ impl YamlGotoDefinition {
     fn index_to_definition(&self, index: &DefinitionIndex) -> GotoDefinitionResult {
         let uri = Url::from_file_path(index.0.clone()).ok()?;
         let (start_position, end_position) = {
-            let range = index.1?;
+            let range = index.1.clone()?;
             (
                 Position::new(
-                    range.start_point.row as u32,
-                    range.start_point.column as u32,
+                    range.start_point.start as u32,
+                    range.start_point.end as u32,
                 ),
-                Position::new(range.end_point.row as u32, range.end_point.column as u32),
+                Position::new(range.end_point.start as u32, range.end_point.end as u32),
             )
         };
         let range = lsp_types::Range::new(start_position, end_position);
@@ -529,12 +529,12 @@ fn get_location_link(index: &DefinitionIndex, node: Node) -> Option<LocationLink
     };
     let selection_range = lsp_types::Range {
         start: Position {
-            line: locale_range.start_point.row as u32,
-            character: locale_range.start_point.column as u32,
+            line: locale_range.start_point.start as u32,
+            character: locale_range.start_point.end as u32,
         },
         end: Position {
-            line: locale_range.end_point.row as u32,
-            character: locale_range.end_point.column as u32,
+            line: locale_range.end_point.start as u32,
+            character: locale_range.end_point.end as u32,
         },
     };
 

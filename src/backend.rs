@@ -157,7 +157,7 @@ impl LanguageServer for Backend {
         // replace the default cache
         let mut cache = self.context.cache.write().await;
         *cache = ProjectCache::new(&root_path, &app).await;
-        drop(guard); // release the guard so that there is no deadlock
+        drop(cache); // release the guard so that there is no deadlock
 
         let parser = ProjectParser::new(&root_path, self.context.clone(), self.client.clone());
         parser.parse().await;

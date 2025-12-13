@@ -59,12 +59,12 @@ pub async fn parse(
     let old_tree = lock.get(&path);
 
     let tree = if let Some(old_tree) = old_tree {
-        let tree = parser.parse(src.deref(), Some(old_tree.deref()));
-        drop(lock);
-        tree
+        parser.parse(src.deref(), Some(old_tree.deref()))
     } else {
         parser.parse(src.deref(), None)
     };
+
+    drop(lock);
     
     if let Some(tree) = tree {
         let tree = Arc::new(tree);

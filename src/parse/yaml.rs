@@ -22,9 +22,10 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles) -> ParseResult {
         parser.parse(src.deref(), None)
     };
 
+    drop(lock);
+
     if let Some(tree) = tree {
         let tree = Arc::new(tree);
-        drop(lock);
         parsed_files
             .write()
             .await

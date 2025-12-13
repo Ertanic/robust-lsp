@@ -1,3 +1,4 @@
+use rayon::join;
 use sha2::{Digest, Sha256};
 use std::{future::Future, path::Path, sync::Arc};
 use tokio::io::{AsyncReadExt, BufReader};
@@ -251,5 +252,48 @@ pub async fn read_file(path: impl AsRef<Path>) -> Option<FileContent> {
             );
             None
         }
+    }
+}
+
+pub fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Range {
+    let lines = std::iter::once(0)
+        .chain(
+            src.char_indices()
+                .filter_map(|(i, c)| Some(i + 1).filter(|_| c == '\n')),
+        )
+        .collect::<Vec<_>>();
+
+    let (start_point, end_point) = join(
+        || get_point(&lines, span.start),
+        || get_point(&lines, span.end),
+    );
+
+    tree_sitter::Range {
+        start_byte: span.start,
+        end_byte: span.end,
+        start_point,
+        end_point,
+    }
+}
+
+pub fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
+    let mut line_range = 0..lines.len();
+    while line_range.end - line_range.start > 1 {
+        let range_middle = line_range.start + (line_range.end - line_range.start) / 2;
+        let (left, right) = (line_range.start..range_middle, range_middle..line_range.end);
+        if (lines[left.start]..lines[left.end]).contains(&index) {
+            line_range = left;
+        } else {
+            line_range = right;
+        }
+    }
+
+    let line_start_index = lines[line_range.start];
+    let line = line_range.start + 1;
+    let col = index - line_start_index + 1;
+
+    tree_sitter::Point {
+        row: line - 1,
+        column: col - 1,
     }
 }

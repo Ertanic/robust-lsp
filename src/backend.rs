@@ -373,6 +373,7 @@ impl LanguageServer for Backend {
                         );
                         Ok(completion.completion())
                 } else  {
+                    tracing::trace!("File wasn't cached.");
                     Ok(None)
                 }
             },

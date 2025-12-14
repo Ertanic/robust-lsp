@@ -1,7 +1,5 @@
-use crate::cache::ProjectCache;
-use crate::semantic::fluent::to_relative_semantic_tokens;
-use crate::utils::get_text_change;
 use crate::{
+    cache::ProjectCache,
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
     hint::{yaml::YamlInlayHint, InlayHint},
@@ -11,11 +9,9 @@ use crate::{
         structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype},
         yaml, ParseResult, ProjectParser,
     },
-    references::csharp::CsharpReferencesProvider,
-    references::ReferencesProvider,
-    semantic::fluent::SemanticAnalyzer,
-    utils::check_project_compliance,
-    utils::get_ext,
+    references::{csharp::CsharpReferencesProvider, ReferencesProvider},
+    semantic::fluent::{to_relative_semantic_tokens, SemanticAnalyzer},
+    utils::{check_project_compliance, get_ext, get_text_change},
 };
 use fluent_syntax::ast::Entry;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -31,16 +27,11 @@ use tokio::sync::{Mutex, RwLock};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
-        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams,
-        InlayHintParams, Location, MessageType, OneOf::Left, ReferenceParams, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind, Url,
-    },
-    lsp_types::{SemanticTokenType, SemanticTokens, SemanticTokensLegend},
-    lsp_types::{
-        SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams,
-        SemanticTokensResult, SemanticTokensServerCapabilities,
+        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        GotoDefinitionParams, GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, InlayHintParams, Location, MessageType,
+        OneOf::Left, ReferenceParams, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+        SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+        TextDocumentSyncKind, Url,
     },
     Client, LanguageServer,
 };
@@ -93,17 +84,12 @@ impl LanguageServer for Backend {
             return Err(Error::request_cancelled());
         }
 
-        self.root_uri
-            .lock()
-            .await
-            .replace(params.root_uri.expect("root_uri is not found"));
+        self.root_uri.lock().await.replace(params.root_uri.expect("root_uri is not found"));
 
         Ok(InitializeResult {
             server_info: None,
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::INCREMENTAL,
-                )),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![" ".to_string()]),
                     ..Default::default()
@@ -111,43 +97,33 @@ impl LanguageServer for Backend {
                 definition_provider: Some(Left(true)),
                 inlay_hint_provider: Some(Left(true)),
                 references_provider: Some(Left(true)),
-                semantic_tokens_provider: Some(
-                    SemanticTokensServerCapabilities::SemanticTokensOptions(
-                        SemanticTokensOptions {
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
-                            legend: SemanticTokensLegend {
-                                token_types: vec![
-                                    SemanticTokenType::new("enumMember"),
-                                    SemanticTokenType::new("string"),
-                                    SemanticTokenType::new("comment"),
-                                    SemanticTokenType::new("number"),
-                                    SemanticTokenType::new("function"),
-                                    SemanticTokenType::new("operator"),
-                                    SemanticTokenType::new("variable"),
-                                    SemanticTokenType::new("parameter"),
-                                ],
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                    ),
-                ),
+                semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    legend: SemanticTokensLegend {
+                        token_types: vec![
+                            SemanticTokenType::new("enumMember"),
+                            SemanticTokenType::new("string"),
+                            SemanticTokenType::new("comment"),
+                            SemanticTokenType::new("number"),
+                            SemanticTokenType::new("function"),
+                            SemanticTokenType::new("operator"),
+                            SemanticTokenType::new("variable"),
+                            SemanticTokenType::new("parameter"),
+                        ],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })),
                 ..Default::default()
             },
         })
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "Server initialized!")
-            .await;
+        self.client.log_message(MessageType::INFO, "Server initialized!").await;
 
         let guard = self.root_uri.lock().await;
-        let root_path = guard
-            .as_ref()
-            .unwrap()
-            .to_file_path()
-            .expect("invalid path");
+        let root_path = guard.as_ref().unwrap().to_file_path().expect("invalid path");
 
         let app = env::current_exe()
             .expect("unable to get program path")
@@ -170,23 +146,14 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let path = params.text_document.uri.to_file_path().unwrap_or_default();
 
-        let tree = self
-            .context
-            .parsed_files
-            .read()
-            .await
-            .get(&path)
-            .map(Arc::clone);
+        let tree = self.context.parsed_files.read().await.get(&path).map(Arc::clone);
 
         if let Some(tree) = tree {
             let content = std::fs::read_to_string(path).unwrap_or_default();
             let rope = Arc::new(RwLock::new(Rope::from(content)));
             let opened_file = OpenedFile { rope, tree };
 
-            self.opened_files
-                .write()
-                .await
-                .insert(params.text_document.uri, opened_file);
+            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
 
             tracing::trace!("Document has been cached.");
         } else {
@@ -207,10 +174,8 @@ impl LanguageServer for Backend {
                     if let Some(range) = change.range {
                         let edit = get_text_change(&rope_guard, &range, &change.text);
 
-                        let start_idx = rope_guard.line_to_char(range.start.line as usize)
-                            + range.start.character as usize;
-                        let end_idx = rope_guard.line_to_char(range.end.line as usize)
-                            + range.end.character as usize;
+                        let start_idx = rope_guard.line_to_char(range.start.line as usize) + range.start.character as usize;
+                        let end_idx = rope_guard.line_to_char(range.end.line as usize) + range.end.character as usize;
 
                         if let Err(err) = rope_guard.try_remove(start_idx..end_idx) {
                             tracing::warn!("Failed to remove text from document: {}.", err);
@@ -231,9 +196,7 @@ impl LanguageServer for Backend {
                 let path = params.text_document.uri.to_file_path().unwrap_or_default();
                 match get_ext(&path) {
                     "cs" => {
-                        parser
-                            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
-                            .unwrap();
+                        parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into()).unwrap();
 
                         let new_tree = parser.parse(rope_guard.to_string(), Some(&*tree.lock().await));
 
@@ -248,10 +211,7 @@ impl LanguageServer for Backend {
                             drop(rope_guard);
                             drop(opened_files_guard);
 
-                            self.opened_files
-                                .write()
-                                .await
-                                .insert(params.text_document.uri, opened_file);
+                            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
 
                             self.context.parsed_files.write().await.insert(path, tree);
                         }
@@ -272,10 +232,7 @@ impl LanguageServer for Backend {
                             drop(rope_guard);
                             drop(opened_files_guard);
 
-                            self.opened_files
-                                .write()
-                                .await
-                                .insert(params.text_document.uri, opened_file);
+                            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
 
                             self.context.parsed_files.write().await.insert(path, tree);
                         }
@@ -295,12 +252,7 @@ impl LanguageServer for Backend {
 
         match ext {
             "cs" => {
-                let result = csharp::parse(
-                    path.clone(),
-                    self.context.parsed_files.clone(),
-                    self.context.cache.clone(),
-                )
-                .await;
+                let result = csharp::parse(path.clone(), self.context.parsed_files.clone(), self.context.cache.clone()).await;
                 match result {
                     ParseResult::Csharp(parsed_classes) => {
                         let mut lock = self.context.classes.write().await;
@@ -325,12 +277,7 @@ impl LanguageServer for Backend {
                 }
             }
             "yml" | "yaml" => {
-                let result = yaml::parse(
-                    path.clone(),
-                    self.context.parsed_files.clone(),
-                    self.context.cache.clone(),
-                )
-                .await;
+                let result = yaml::parse(path.clone(), self.context.parsed_files.clone(), self.context.cache.clone()).await;
                 match result {
                     ParseResult::YamlPrototypes(parsed_prototypes) => {
                         let mut lock = self.context.prototypes.write().await;
@@ -424,12 +371,7 @@ impl LanguageServer for Backend {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let file = params
-            .text_document_position
-            .text_document
-            .uri
-            .to_file_path()
-            .unwrap_or_default();
+        let file = params.text_document_position.text_document.uri.to_file_path().unwrap_or_default();
         let extension = get_ext(&file);
 
         match extension {
@@ -454,10 +396,7 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn inlay_hint(
-        &self,
-        params: InlayHintParams,
-    ) -> Result<Option<Vec<tower_lsp::lsp_types::InlayHint>>> {
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<tower_lsp::lsp_types::InlayHint>>> {
         let file = params.text_document.uri.to_file_path().unwrap_or_default();
         let extension = get_ext(&file);
 
@@ -467,12 +406,7 @@ impl LanguageServer for Backend {
                 let opened_file = opened.get(&params.text_document.uri);
 
                 if let Some(OpenedFile { rope, tree }) = opened_file {
-                    let hint = YamlInlayHint::new(
-                        self.context.classes.clone(),
-                        params.range,
-                        rope.read().await.deref(),
-                        Arc::clone(tree),
-                    );
+                    let hint = YamlInlayHint::new(self.context.classes.clone(), params.range, rope.read().await.deref(), Arc::clone(tree));
                     Ok(hint.inlay_hint().await)
                 } else {
                     tracing::trace!("File wasn't cached.");
@@ -483,10 +417,7 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn semantic_tokens_full(
-        &self,
-        params: SemanticTokensParams,
-    ) -> Result<Option<SemanticTokensResult>> {
+    async fn semantic_tokens_full(&self, params: SemanticTokensParams) -> Result<Option<SemanticTokensResult>> {
         let path = params.text_document.uri.to_file_path().unwrap_or_default();
 
         if get_ext(&path) != "ftl" {
@@ -495,11 +426,10 @@ impl LanguageServer for Backend {
         }
 
         let content = std::fs::read_to_string(path).unwrap_or_default();
-        let resource =
-            fluent_syntax::parser::parse(content.as_str()).unwrap_or_else(|(res, errors)| {
-                tracing::warn!("{:?}", errors);
-                res
-            });
+        let resource = fluent_syntax::parser::parse(content.as_str()).unwrap_or_else(|(res, errors)| {
+            tracing::warn!("{:?}", errors);
+            res
+        });
 
         let values = resource
             .body
@@ -509,9 +439,7 @@ impl LanguageServer for Backend {
                 let analyzer = SemanticAnalyzer::new(&content);
                 match e {
                     Entry::Message(msg) => Some(analyzer.message_to_semantic(msg)),
-                    Entry::Comment(comment)
-                    | Entry::GroupComment(comment)
-                    | Entry::ResourceComment(comment) => {
+                    Entry::Comment(comment) | Entry::GroupComment(comment) | Entry::ResourceComment(comment) => {
                         Some(vec![analyzer.comment_to_semantic(comment)])
                     }
                     Entry::Term(term) => Some(analyzer.term_to_semantic(term)),

@@ -2,9 +2,9 @@
 
 use super::*;
 use crate::backend::CsharpObjects;
+use bincode::{Decode, Encode};
 use common::{DefinitionIndex, Index};
 use std::sync::Arc;
-use bincode::{Decode, Encode};
 use tree_sitter::Range;
 
 pub struct ReflectionManager {
@@ -45,15 +45,15 @@ impl ReflectionManager {
                     let arg = attr.arguments.get("type");
                     if let Some(arg) = arg {
                         match arg.value {
-                            CsharpAttributeArgumentType::String(ref tag) => {
-                                tag.trim_matches('"') == name
-                            }
+                            CsharpAttributeArgumentType::String(ref tag) => tag.trim_matches('"') == name,
                             _ => false,
                         }
-                    } else {
+                    }
+                    else {
                         false
                     }
-                } else {
+                }
+                else {
                     false
                 }
             }
@@ -69,8 +69,7 @@ impl ReflectionManager {
         let class = lock.par_iter().find_any(|c| {
             let name = c.name == name || c.name == format!("{name}Component");
             let attr = c.attributes.contains("RegisterComponent");
-            let base = c.base.contains(&String::from("Component"))
-                || c.base.contains(&String::from("IComponent"));
+            let base = c.base.contains(&String::from("Component")) || c.base.contains(&String::from("IComponent"));
 
             name && attr && base
         });
@@ -102,21 +101,15 @@ impl CsharpAttributeCollection {
     }
 
     pub fn get(&self, name: impl AsRef<str> + Sync) -> Option<&CsharpAttribute> {
-        self.attributes
-            .par_iter()
-            .find_any(|attr| attr.name == name.as_ref())
+        self.attributes.par_iter().find_any(|attr| attr.name == name.as_ref())
     }
 
     pub fn get_mut(&mut self, name: impl AsRef<str> + Sync) -> Option<&mut CsharpAttribute> {
-        self.attributes
-            .par_iter_mut()
-            .find_any(|attr| attr.name == name.as_ref())
+        self.attributes.par_iter_mut().find_any(|attr| attr.name == name.as_ref())
     }
 
     pub fn contains(&self, name: impl AsRef<str> + Sync) -> bool {
-        self.attributes
-            .par_iter()
-            .any(|attr| attr.name == name.as_ref())
+        self.attributes.par_iter().any(|attr| attr.name == name.as_ref())
     }
 
     pub fn len(&self) -> usize {
@@ -143,11 +136,7 @@ pub struct Component {
 
 impl Component {
     pub fn get_component_name(&self) -> String {
-        let name = self
-            .class
-            .name
-            .strip_suffix("Component")
-            .unwrap_or(self.class.name.as_str());
+        let name = self.class.name.strip_suffix("Component").unwrap_or(self.class.name.as_str());
 
         stringcase::pascal_case(name)
     }
@@ -157,12 +146,12 @@ impl TryFrom<Arc<CsharpObject>> for Component {
     type Error = ();
 
     fn try_from(class: Arc<CsharpObject>) -> Result<Self, Self::Error> {
-        if class.attributes.contains("RegisterComponent")
-            && class.base.contains(&"Component".to_owned())
+        if class.attributes.contains("RegisterComponent") && class.base.contains(&"Component".to_owned())
             || class.base.contains(&"IComponent".to_owned())
         {
             Ok(Component { class })
-        } else {
+        }
+        else {
             Err(())
         }
     }
@@ -201,7 +190,8 @@ impl Prototype {
         let name = name.unwrap();
         if name.ends_with("Prototype") {
             name.strip_suffix("Prototype").unwrap().to_owned()
-        } else {
+        }
+        else {
             name
         }
     }
@@ -213,7 +203,8 @@ impl TryFrom<Arc<CsharpObject>> for Prototype {
     fn try_from(class: Arc<CsharpObject>) -> Result<Self, Self::Error> {
         if class.base.contains(&"IPrototype".into()) && class.attributes.contains("Prototype") {
             Ok(Self { class })
-        } else {
+        }
+        else {
             Err(())
         }
     }
@@ -331,13 +322,7 @@ pub struct CsharpClassField {
 }
 
 impl CsharpClassField {
-    pub fn new(
-        name: String,
-        type_name: String,
-        attributes: CsharpAttributeCollection,
-        modifiers: HashSet<String>,
-        index: DefinitionIndex,
-    ) -> Self {
+    pub fn new(name: String, type_name: String, attributes: CsharpAttributeCollection, modifiers: HashSet<String>, index: DefinitionIndex) -> Self {
         Self {
             name,
             type_name,
@@ -362,7 +347,8 @@ impl CsharpClassField {
                     return name.trim_matches('"').to_owned();
                 }
             }
-        } else if self.attributes.contains("IncludeDataField") {
+        }
+        else if self.attributes.contains("IncludeDataField") {
             match self.type_name.trim_end_matches('?') {
                 "SpriteSpecifier.Rsi" | "SpriteSpecifier" => return "sprite".to_owned(),
                 _ => {}

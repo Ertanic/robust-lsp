@@ -13,8 +13,8 @@ use std::{fs, path::PathBuf, sync::Arc};
 use stringcase::camel_case;
 use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{
-    self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
-    CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
+    self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList, CompletionResponse, CompletionTextEdit, Position, Range,
+    TextEdit,
 };
 use tracing::instrument;
 use tree_sitter::{Node, Point, Tree};
@@ -80,13 +80,7 @@ impl Completion for YamlCompletion {
 }
 
 impl YamlCompletion {
-    pub fn new(
-        context: Arc<Context>,
-        position: Position,
-        src: &Rope,
-        tree: Arc<Mutex<Tree>>,
-        root_path: PathBuf,
-    ) -> Self {
+    pub fn new(context: Arc<Context>, position: Position, src: &Rope, tree: Arc<Mutex<Tree>>, root_path: PathBuf) -> Self {
         let src = src.to_string();
 
         Self {
@@ -123,7 +117,8 @@ impl YamlCompletion {
         let point = Point {
             row: if self.position.line == 0 {
                 return None;
-            } else {
+            }
+            else {
                 self.position.line as usize - 1
             },
             column: self.position.character as usize,
@@ -132,7 +127,8 @@ impl YamlCompletion {
             let mut node = node.named_descendant_for_point_range(point, point)?;
             if node.kind() == "block_mapping" {
                 node
-            } else {
+            }
+            else {
                 while let Some(n) = node.parent() {
                     node = n;
                     if n.kind() == "block_mapping" {
@@ -145,7 +141,8 @@ impl YamlCompletion {
 
         if found_node.kind() == "block_mapping" {
             Some(found_node)
-        } else {
+        }
+        else {
             None
         }
     }
@@ -169,11 +166,7 @@ impl YamlCompletion {
 
         for i in 0..node.named_child_count() {
             let field_node = node.named_child(i)?;
-            let key = field_node
-                .child_by_field_name("key")?
-                .utf8_text(self.src.as_bytes())
-                .ok()?
-                .to_owned();
+            let key = field_node.child_by_field_name("key")?.utf8_text(self.src.as_bytes()).ok()?.to_owned();
 
             if key == name {
                 return Some(field_node);
@@ -257,17 +250,15 @@ impl YamlCompletion {
 
         if self.get_nesting(&node) > 4 {
             None
-        } else {
+        }
+        else {
             Some(CompletionResponse::Array(vec![CompletionItem {
                 label: "type".to_owned(),
                 kind: Some(CompletionItemKind::FIELD),
                 detail: Some("string".to_owned()),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: {
-                        let position = Position::new(
-                            self.position.line,
-                            node.start_position().column as u32 + 2,
-                        );
+                        let position = Position::new(self.position.line, node.start_position().column as u32 + 2);
                         lsp_types::Range {
                             start: position,
                             end: position,
@@ -293,9 +284,11 @@ impl YamlCompletion {
                 4 => return self.components_completion(node, key_node).await,
                 _ => None,
             }
-        } else if key_name == "parent" && nest == 2 {
+        }
+        else if key_name == "parent" && nest == 2 {
             self.prototype_parents_completion(node).await
-        } else {
+        }
+        else {
             self.object_field_type_completion(node).await
         }
     }
@@ -305,7 +298,8 @@ impl YamlCompletion {
 
         if self.get_nesting(&node) > 2 {
             self.component_fields_completion(node).await
-        } else {
+        }
+        else {
             self.prototype_fields_completion(node).await
         }
     }
@@ -330,14 +324,8 @@ impl YamlCompletion {
         let reflection = ReflectionManager::new(self.context.classes.clone());
 
         match self.get_nesting(&node) {
-            2 => {
-                self.prototype_field_type_completion(node, reflection, obj_name, key_name)
-                    .await
-            }
-            4 => {
-                self.component_field_type_completion(node, reflection, obj_name, key_name)
-                    .await
-            }
+            2 => self.prototype_field_type_completion(node, reflection, obj_name, key_name).await,
+            4 => self.component_field_type_completion(node, reflection, obj_name, key_name).await,
             _ => None,
         }
     }
@@ -359,10 +347,7 @@ impl YamlCompletion {
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
-        match (
-            comp.get_component_name().as_str(),
-            field.get_data_field_name().as_str(),
-        ) {
+        match (comp.get_component_name().as_str(), field.get_data_field_name().as_str()) {
             ("Sprite" | "Icon", "sprite") => self.sprite_field_type_completion(node),
             ("Sprite", "state") => self.state_field_type_completion(node),
             _ => self.field_type_completion(node, field, reflection).await,
@@ -377,9 +362,7 @@ impl YamlCompletion {
             return None;
         }
 
-        let sprite_node = self
-            .get_field(&node.parent()?, "sprite")?
-            .child_by_field_name("value")?;
+        let sprite_node = self.get_field(&node.parent()?, "sprite")?.child_by_field_name("value")?;
         let sprite_path = sprite_node.utf8_text(self.src.as_bytes()).ok()?;
 
         if !sprite_path.ends_with(".rsi") {
@@ -433,11 +416,7 @@ impl YamlCompletion {
                 states.into_iter().map(|(_, s)| s).collect::<Vec<_>>()
             }
             None => {
-                let states = meta
-                    .states
-                    .into_iter()
-                    .map(|s| map(s.name))
-                    .collect::<Vec<_>>();
+                let states = meta.states.into_iter().map(|s| map(s.name)).collect::<Vec<_>>();
 
                 states
             }
@@ -445,7 +424,8 @@ impl YamlCompletion {
 
         if states.is_empty() {
             None
-        } else {
+        }
+        else {
             Some(CompletionResponse::Array(states))
         }
     }
@@ -479,19 +459,11 @@ impl YamlCompletion {
                         .filter_map(Result::ok)
                         .map(|f| {
                             let path = f.path();
-                            let name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
+                            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                             let is_rsi = name.ends_with(".rsi");
                             CompletionItem {
                                 label: name.clone(),
-                                kind: Some(if is_rsi {
-                                    CompletionItemKind::FILE
-                                } else {
-                                    CompletionItemKind::FOLDER
-                                }),
+                                kind: Some(if is_rsi { CompletionItemKind::FILE } else { CompletionItemKind::FOLDER }),
                                 insert_text: Some(if is_rsi { name } else { format!("{name}/") }),
                                 ..Default::default()
                             }
@@ -499,11 +471,9 @@ impl YamlCompletion {
                         .collect::<Vec<_>>();
 
                     paths
-                } else {
-                    let parts = value
-                        .split('/')
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>();
+                }
+                else {
+                    let parts = value.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>();
                     let last = parts.last()?.to_owned();
 
                     if last.ends_with(".rsi") {
@@ -514,9 +484,9 @@ impl YamlCompletion {
                     let parts_count = parts.len();
                     let sprites_path = if parts_count == 1 {
                         sprites_folder
-                    } else {
-                        sprites_folder
-                            .join(parts.into_iter().take(parts_count - 1).collect::<PathBuf>())
+                    }
+                    else {
+                        sprites_folder.join(parts.into_iter().take(parts_count - 1).collect::<PathBuf>())
                     };
                     if !sprites_path.exists() || !sprites_path.is_dir() {
                         tracing::trace!("{sprites_path:?} does not exist");
@@ -528,11 +498,7 @@ impl YamlCompletion {
                         .filter_map(Result::ok)
                         .map(|f| {
                             let path = f.path();
-                            let name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
+                            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                             (strsim::jaro_winkler(last, &name), name)
                         })
                         .filter(|(diff, _)| *diff > 0.6)
@@ -542,16 +508,8 @@ impl YamlCompletion {
                                 diff,
                                 CompletionItem {
                                     label: name.clone(),
-                                    kind: Some(if is_rsi {
-                                        CompletionItemKind::FILE
-                                    } else {
-                                        CompletionItemKind::FOLDER
-                                    }),
-                                    insert_text: Some(if is_rsi {
-                                        name
-                                    } else {
-                                        format!("{name}/")
-                                    }),
+                                    kind: Some(if is_rsi { CompletionItemKind::FILE } else { CompletionItemKind::FOLDER }),
+                                    insert_text: Some(if is_rsi { name } else { format!("{name}/") }),
                                     ..Default::default()
                                 },
                             )
@@ -571,11 +529,7 @@ impl YamlCompletion {
                     .filter_map(Result::ok)
                     .map(|f| {
                         let path = f.path();
-                        let name = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
 
                         if name.ends_with(".rsi") {
                             CompletionItem {
@@ -584,12 +538,14 @@ impl YamlCompletion {
                                 insert_text: Some(format!("{name}/")),
                                 ..Default::default()
                             }
-                        } else {
+                        }
+                        else {
                             CompletionItem {
                                 label: name.clone(),
                                 kind: Some(if path.is_dir() {
                                     CompletionItemKind::FOLDER
-                                } else {
+                                }
+                                else {
                                     CompletionItemKind::FILE
                                 }),
                                 insert_text: Some(format!("{name}/")),
@@ -608,7 +564,8 @@ impl YamlCompletion {
                 is_incomplete: true,
                 items: paths,
             }))
-        } else {
+        }
+        else {
             None
         }
     }
@@ -632,12 +589,7 @@ impl YamlCompletion {
         self.field_type_completion(node, field, reflection).await
     }
 
-    async fn field_type_completion<'a>(
-        &'a self,
-        node: Node<'a>,
-        field: CsharpClassField,
-        reflection: ReflectionManager,
-    ) -> CompletionResult {
+    async fn field_type_completion<'a>(&'a self, node: Node<'a>, field: CsharpClassField, reflection: ReflectionManager) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let items = match field.type_name.trim_end_matches('?') {
@@ -726,9 +678,7 @@ impl YamlCompletion {
                         prototypes.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
                     }
                     None => {
-                        let mut prototypes = filtered_prototypes
-                            .map(|p| map(p.id.clone()))
-                            .collect::<Vec<_>>();
+                        let mut prototypes = filtered_prototypes.map(|p| map(p.id.clone())).collect::<Vec<_>>();
 
                         prototypes.truncate(100);
                         prototypes
@@ -748,7 +698,8 @@ impl YamlCompletion {
                             new_text: key.clone(),
                             range,
                         }))
-                    } else {
+                    }
+                    else {
                         None
                     },
                     ..Default::default()
@@ -768,14 +719,8 @@ impl YamlCompletion {
                                 (
                                     d,
                                     map(l.key.clone(), {
-                                        let start = Position::new(
-                                            value_node.start_position().row as u32,
-                                            value_node.start_position().column as u32,
-                                        );
-                                        let end = Position::new(
-                                            value_node.end_position().row as u32,
-                                            value_node.end_position().column as u32,
-                                        );
+                                        let start = Position::new(value_node.start_position().row as u32, value_node.start_position().column as u32);
+                                        let end = Position::new(value_node.end_position().row as u32, value_node.end_position().column as u32);
                                         Some(Range::new(start, end))
                                     }),
                                 )
@@ -789,10 +734,7 @@ impl YamlCompletion {
                         locales.into_iter().map(|(_, l)| l).collect::<Vec<_>>()
                     }
                     None => {
-                        let mut locales = lock
-                            .par_iter()
-                            .map(|l| map(l.key.clone(), None))
-                            .collect::<Vec<_>>();
+                        let mut locales = lock.par_iter().map(|l| map(l.key.clone(), None)).collect::<Vec<_>>();
 
                         locales.truncate(100);
                         locales
@@ -806,19 +748,12 @@ impl YamlCompletion {
 
         tracing::trace!("Items found: {}", items.len());
 
-        Some(CompletionResponse::List(CompletionList {
-            is_incomplete: true,
-            items,
-        }))
+        Some(CompletionResponse::List(CompletionList { is_incomplete: true, items }))
     }
 
     // Is that even a little bit readable? I don't know how else to rewrite it better...
     async fn prototype_parents_completion<'a>(&'a self, node: Node<'a>) -> CompletionResult {
-        debug_assert!(
-            node.kind() == "flow_sequence"
-                || node.kind() == "flow_node"
-                || node.kind() == "block_mapping_pair"
-        );
+        debug_assert!(node.kind() == "flow_sequence" || node.kind() == "flow_node" || node.kind() == "block_mapping_pair");
 
         #[rustfmt::skip]
         let parent_field_name = match node.kind() {
@@ -841,9 +776,7 @@ impl YamlCompletion {
 
         let specified_parents = match node.kind() {
             "flow_sequence" => self.get_specified_parents(&node).unwrap_or_default(),
-            "flow_node" => self
-                .get_specified_parents(&node.parent()?)
-                .unwrap_or_default(),
+            "flow_node" => self.get_specified_parents(&node.parent()?).unwrap_or_default(),
             "block_mapping_pair" => vec![],
             _ => return None,
         };
@@ -854,10 +787,7 @@ impl YamlCompletion {
             .filter(|p| p.prototype == proto_name)
             .filter(|p| !specified_parents.contains(&p.id.as_str()));
 
-        let map = |id: String,
-                   prototype: String,
-                   start_position: u32,
-                   end_position: Option<Point>| CompletionItem {
+        let map = |id: String, prototype: String, start_position: u32, end_position: Option<Point>| CompletionItem {
             label: id.clone(),
             kind: Some(CompletionItemKind::CLASS),
             detail: Some(prototype),
@@ -868,7 +798,8 @@ impl YamlCompletion {
                         start: position,
                         end: if let Some(end_position) = end_position {
                             Position::new(end_position.row as u32, end_position.column as u32)
-                        } else {
+                        }
+                        else {
                             position
                         },
                     }
@@ -967,14 +898,7 @@ impl YamlCompletion {
                 None => {
                     let key_node = node.child_by_field_name("key")?;
                     let mut parents = filtered_prototypes
-                        .map(|p| {
-                            map(
-                                p.id.clone(),
-                                p.prototype.clone(),
-                                key_node.end_position().column as u32 + 2,
-                                None,
-                            )
-                        })
+                        .map(|p| map(p.id.clone(), p.prototype.clone(), key_node.end_position().column as u32 + 2, None))
                         .collect::<Vec<_>>();
 
                     parents.truncate(100);
@@ -1002,9 +926,7 @@ impl YamlCompletion {
             .get_fields(Arc::clone(&comp))
             .await
             .into_par_iter()
-            .filter(|f| {
-                f.attributes.contains("DataField") || f.attributes.contains("IncludeDataField")
-            })
+            .filter(|f| f.attributes.contains("DataField") || f.attributes.contains("IncludeDataField"))
             .filter(|f| !specified_fields.contains(&f.get_data_field_name().as_str()))
             .map(|f| {
                 let name = f.get_data_field_name();
@@ -1014,10 +936,7 @@ impl YamlCompletion {
                     detail: Some(f.type_name),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: {
-                            let position = Position::new(
-                                self.position.line,
-                                node.start_position().column as u32,
-                            );
+                            let position = Position::new(self.position.line, node.start_position().column as u32);
                             lsp_types::Range {
                                 start: position,
                                 end: position,
@@ -1032,7 +951,8 @@ impl YamlCompletion {
 
         if fields.len() > 0 {
             Some(CompletionResponse::Array(fields))
-        } else {
+        }
+        else {
             None
         }
     }
@@ -1060,10 +980,7 @@ impl YamlCompletion {
                     detail: Some(f.type_name),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: {
-                            let position = Position::new(
-                                self.position.line,
-                                node.start_position().column as u32,
-                            );
+                            let position = Position::new(self.position.line, node.start_position().column as u32);
                             lsp_types::Range {
                                 start: position,
                                 end: position,
@@ -1073,7 +990,8 @@ impl YamlCompletion {
                     })),
                     sort_text: if f.name == "id" || f.name == "components" {
                         Some("0".to_owned())
-                    } else {
+                    }
+                    else {
                         Some("1".to_owned())
                     },
                     ..Default::default()
@@ -1083,21 +1001,16 @@ impl YamlCompletion {
 
         if fields.len() > 0 {
             Some(CompletionResponse::Array(fields))
-        } else {
+        }
+        else {
             None
         }
     }
 
-    async fn prototype_completion<'a>(
-        &'a self,
-        node: Node<'a>,
-        key_node: Node<'a>,
-    ) -> CompletionResult {
+    async fn prototype_completion<'a>(&'a self, node: Node<'a>, key_node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        let value_node = node
-            .child_by_field_name("value")
-            .map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
+        let value_node = node.child_by_field_name("value").map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
 
         let lock = self.context.classes.read().await;
         let completions = lock
@@ -1109,7 +1022,8 @@ impl YamlCompletion {
                     let diff = strsim::damerau_levenshtein(value.to_lowercase().as_str(), &name);
 
                     diff < name.len()
-                } else {
+                }
+                else {
                     true
                 }
             })
@@ -1125,10 +1039,7 @@ impl YamlCompletion {
                     }),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: {
-                            let position = Position::new(
-                                self.position.line,
-                                key_node.end_position().column as u32 + 2,
-                            );
+                            let position = Position::new(self.position.line, key_node.end_position().column as u32 + 2);
                             lsp_types::Range {
                                 start: position,
                                 end: position,
@@ -1138,7 +1049,8 @@ impl YamlCompletion {
                     })),
                     sort_text: if name.to_lowercase() == "entity" {
                         Some("0".to_owned())
-                    } else {
+                    }
+                    else {
                         Some("1".to_owned())
                     },
                     ..Default::default()
@@ -1149,11 +1061,7 @@ impl YamlCompletion {
         Some(CompletionResponse::Array(completions))
     }
 
-    async fn components_completion<'a>(
-        &'a self,
-        node: Node<'a>,
-        key_node: Node<'a>,
-    ) -> CompletionResult {
+    async fn components_completion<'a>(&'a self, node: Node<'a>, key_node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let is_components_node = {
@@ -1163,7 +1071,8 @@ impl YamlCompletion {
             }
             if node.kind() != "block_mapping_pair" {
                 false
-            } else {
+            }
+            else {
                 let key_node = node.child_by_field_name("key")?;
                 let key_value = key_node.utf8_text(self.src.as_bytes()).ok()?;
                 key_value == "components"
@@ -1177,9 +1086,7 @@ impl YamlCompletion {
         let value = node.child_by_field_name("value");
 
         let lock = self.context.classes.read().await;
-        let completions = lock
-            .par_iter()
-            .filter_map(|c| Component::try_from(Arc::clone(c)).ok());
+        let completions = lock.par_iter().filter_map(|c| Component::try_from(Arc::clone(c)).ok());
 
         let map = |c: &Component| {
             let name = c.get_component_name();
@@ -1209,14 +1116,8 @@ impl YamlCompletion {
                             CompletionItem {
                                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                                     range: {
-                                        let start = Position::new(
-                                            self.position.line,
-                                            key_node.end_position().column as u32 + 2,
-                                        );
-                                        let end = Position::new(
-                                            self.position.line,
-                                            value_node.end_position().column as u32,
-                                        );
+                                        let start = Position::new(self.position.line, key_node.end_position().column as u32 + 2);
+                                        let end = Position::new(self.position.line, value_node.end_position().column as u32);
                                         lsp_types::Range { start, end }
                                     },
                                     new_text: name,
@@ -1241,9 +1142,6 @@ impl YamlCompletion {
                 .collect(),
         };
 
-        Some(CompletionResponse::List(CompletionList {
-            is_incomplete: true,
-            items,
-        }))
+        Some(CompletionResponse::List(CompletionList { is_incomplete: true, items }))
     }
 }

@@ -4,21 +4,13 @@ use crate::{
     parse::ParseResult,
     utils::{read_file, FileContent},
 };
-use std::ops::Deref;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tree_sitter::{Node, Range};
 
-pub async fn parse(
-    path: PathBuf,
-    parsed_files: ParsedFiles,
-    cache: Arc<RwLock<ProjectCache>>,
-) -> ParseResult {
+pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_yaml::language())
-        .expect("Failed to load YAML grammar");
+    parser.set_language(&tree_sitter_yaml::language()).expect("Failed to load YAML grammar");
 
     let FileContent { hash, content } = match read_file(&path).await {
         Some(content) => content,
@@ -37,7 +29,8 @@ pub async fn parse(
 
     let tree = if let Some(old_tree) = old_tree {
         parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
-    } else {
+    }
+    else {
         parser.parse(src.deref(), None)
     };
 
@@ -45,10 +38,7 @@ pub async fn parse(
 
     if let Some(tree) = tree {
         let tree = Arc::new(Mutex::new(tree));
-        parsed_files
-            .write()
-            .await
-            .insert(path.clone(), Arc::clone(&tree));
+        parsed_files.write().await.insert(path.clone(), Arc::clone(&tree));
 
         let tree = tree.lock().await;
         let root_node = tree.root_node();
@@ -74,11 +64,7 @@ pub async fn parse(
     ParseResult::None
 }
 
-fn get_yaml_prototype(
-    block_sequence_item_node: Node,
-    src: &str,
-    path: &PathBuf,
-) -> Option<YamlPrototype> {
+fn get_yaml_prototype(block_sequence_item_node: Node, src: &str, path: &PathBuf) -> Option<YamlPrototype> {
     if let Some(block_mapping_node) = get_block_mapping(block_sequence_item_node) {
         let mut prototype = None;
         let mut id = None;
@@ -100,9 +86,7 @@ fn get_yaml_prototype(
             };
 
             match key_name {
-                "type" => {
-                    prototype = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned())
-                }
+                "type" => prototype = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned()),
                 "id" => {
                     id = Some(value_node.utf8_text(src.as_bytes()).unwrap().to_owned());
                     id_range = Some(value_node.range());
@@ -119,20 +103,13 @@ fn get_yaml_prototype(
                                 for i in 0..sequence_node.named_child_count() {
                                     let sequence_item_node = sequence_node.named_child(i).unwrap();
                                     match sequence_item_node.named_child(0) {
-                                        Some(content_node) => parents.push(
-                                            content_node
-                                                .utf8_text(src.as_bytes())
-                                                .unwrap()
-                                                .to_owned(),
-                                        ),
+                                        Some(content_node) => parents.push(content_node.utf8_text(src.as_bytes()).unwrap().to_owned()),
                                         None => continue,
                                     }
                                 }
                             }
                             _ => {
-                                parents.push(
-                                    sequence_node.utf8_text(src.as_bytes()).unwrap().to_owned(),
-                                );
+                                parents.push(sequence_node.utf8_text(src.as_bytes()).unwrap().to_owned());
                                 continue;
                             }
                         }
@@ -182,7 +159,8 @@ fn get_block_mapping<'a>(block_sequence_item_node: Node<'a>) -> Option<Node<'a>>
 
     if block_mapping_node.kind() == "block_mapping" {
         Some(block_mapping_node)
-    } else {
+    }
+    else {
         None
     }
 }

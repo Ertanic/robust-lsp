@@ -4,10 +4,8 @@ use std::{future::Future, path::Path, sync::Arc};
 use tokio::io::{AsyncReadExt, BufReader};
 use tower_lsp::{
     lsp_types::{
-        self, notification::Progress, request::WorkDoneProgressCreate, InitializeParams,
-        NumberOrString, Position, ProgressParams, ProgressParamsValue, WorkDoneProgress,
-        WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
-        WorkDoneProgressReport,
+        self, notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString, Position, ProgressParams,
+        ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
     },
     Client,
 };
@@ -18,8 +16,7 @@ pub fn check_project_compliance(params: &InitializeParams) -> bool {
     if let Some(root_uri) = params.root_uri.as_ref() {
         let root_path = root_uri.to_file_path().unwrap();
 
-        return root_path.join("SpaceStation14.sln").exists()
-            || root_path.join("RobustToolbox/RobustToolbox.sln").exists();
+        return root_path.join("SpaceStation14.sln").exists() || root_path.join("RobustToolbox/RobustToolbox.sln").exists();
     }
 
     false
@@ -76,14 +73,12 @@ impl ProgressStatus {
             .client
             .send_notification::<Progress>(ProgressParams {
                 token: NumberOrString::String(instance.id.clone()),
-                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
-                    WorkDoneProgressBegin {
-                        title: params.title,
-                        cancellable: Some(params.cancellable),
-                        message: params.first_message,
-                        percentage: Some(params.percentage),
-                    },
-                )),
+                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                    title: params.title,
+                    cancellable: Some(params.cancellable),
+                    message: params.first_message,
+                    percentage: Some(params.percentage),
+                })),
             })
             .await;
 
@@ -97,13 +92,11 @@ impl ProgressStatus {
         self.client
             .send_notification::<Progress>(ProgressParams {
                 token: NumberOrString::String(self.id.clone()),
-                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
-                    WorkDoneProgressReport {
-                        cancellable: Some(true),
-                        message: next_message,
-                        percentage: Some(next_percentage),
-                    },
-                )),
+                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(WorkDoneProgressReport {
+                    cancellable: Some(true),
+                    message: next_message,
+                    percentage: Some(next_percentage),
+                })),
             })
             .await;
     }
@@ -133,9 +126,7 @@ where
     Fn: FnOnce() -> F,
     F: Future,
 {
-    tokio::task::block_in_place(move || {
-        tokio::runtime::Handle::current().block_on(async move { func().await })
-    })
+    tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(async move { func().await }))
 }
 
 // Calculate the position for the correct node search.
@@ -150,7 +141,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
     if trim_str.len() == 0 {
         let col = if position.character == 0 {
             position.character
-        } else {
+        }
+        else {
             position.character - 1
         } as usize;
 
@@ -158,7 +150,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 
     // If the string starts with `-`, we try to find the coordinate starting before
     // the `-` character, since only there tree-sitter can detect the `block_sequence_item` node.
-    } else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
+    }
+    else if trim_str.len() == 1 && trim_str.chars().all(|c| c == '-') {
         let mut col = 0;
         let chars = line.chars();
         for ch in chars {
@@ -171,7 +164,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 
     // If the string is not empty, we catch the beginning of the text
     // and the end of the text to properly search for child nodes.
-    } else {
+    }
+    else {
         let mut scol = line.chars().count();
         let mut ecol = scol;
         let mut chars = {
@@ -181,7 +175,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 
                 if scol == position.character as usize {
                     break;
-                } else if scol < position.character as usize {
+                }
+                else if scol < position.character as usize {
                     c.next();
                     scol += 1;
                     break;
@@ -195,7 +190,8 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 
             if !ch.is_whitespace() {
                 text = true;
-            } else if text && ch.is_whitespace() {
+            }
+            else if text && ch.is_whitespace() {
                 break;
             }
 
@@ -209,10 +205,7 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
 }
 
 pub fn get_ext(file: &Path) -> &str {
-    file.extension()
-        .unwrap_or_default()
-        .to_str()
-        .unwrap_or_default()
+    file.extension().unwrap_or_default().to_str().unwrap_or_default()
 }
 
 pub struct FileContent {
@@ -243,10 +236,7 @@ pub async fn read_file(path: impl AsRef<Path>) -> Option<FileContent> {
             Some(file_content)
         }
         Err(err) => {
-            error!(
-                "unable to open file {} due to error: {err:?}",
-                path.as_ref().display()
-            );
+            error!("unable to open file {} due to error: {err:?}", path.as_ref().display());
             None
         }
     }
@@ -254,16 +244,10 @@ pub async fn read_file(path: impl AsRef<Path>) -> Option<FileContent> {
 
 pub fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter::Range {
     let lines = std::iter::once(0)
-        .chain(
-            src.char_indices()
-                .filter_map(|(i, c)| Some(i + 1).filter(|_| c == '\n')),
-        )
+        .chain(src.char_indices().filter_map(|(i, c)| Some(i + 1).filter(|_| c == '\n')))
         .collect::<Vec<_>>();
 
-    let (start_point, end_point) = join(
-        || get_point(&lines, span.start),
-        || get_point(&lines, span.end),
-    );
+    let (start_point, end_point) = join(|| get_point(&lines, span.start), || get_point(&lines, span.end));
 
     tree_sitter::Range {
         start_byte: span.start,
@@ -280,7 +264,8 @@ pub fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
         let (left, right) = (line_range.start..range_middle, range_middle..line_range.end);
         if (lines[left.start]..lines[left.end]).contains(&index) {
             line_range = left;
-        } else {
+        }
+        else {
             line_range = right;
         }
     }
@@ -295,11 +280,7 @@ pub fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
     }
 }
 
-pub fn get_text_change(
-    rope: &ropey::Rope,
-    range: &lsp_types::Range,
-    new_text: &str,
-) -> Option<InputEdit> {
+pub fn get_text_change(rope: &ropey::Rope, range: &lsp_types::Range, new_text: &str) -> Option<InputEdit> {
     let start_char = rope.line_to_char(range.start.line as usize) + range.start.character as usize;
     let old_end_char = rope.line_to_char(range.end.line as usize) + range.end.character as usize;
 
@@ -328,7 +309,8 @@ pub fn get_text_change(
                     row: range.start.line as usize,
                     column: range.start.character as usize + new_text.chars().count(),
                 }
-            } else {
+            }
+            else {
                 Point {
                     row: range.start.line as usize + lines - 1,
                     column: new_text.lines().last().unwrap_or_default().chars().count(),

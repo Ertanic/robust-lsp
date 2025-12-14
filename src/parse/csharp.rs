@@ -1,15 +1,16 @@
 use super::{
     common::{DefinitionIndex, ParseFromNode},
     structs::csharp::{
-        CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType,
-        CsharpAttributeCollection, CsharpClassField, CsharpObject,
+        CsharpAttribute, CsharpAttributeArgument, CsharpAttributeArgumentType, CsharpAttributeCollection, CsharpClassField, CsharpObject,
     },
     ParseResult,
 };
-use crate::backend::ParsedFiles;
-use crate::cache::{CacheContent, CacheContext, CacheKey, ProjectCache};
-use crate::parse::common::IndexRange;
-use crate::utils::{read_file, FileContent};
+use crate::{
+    backend::ParsedFiles,
+    cache::{CacheContent, CacheContext, CacheKey, ProjectCache},
+    parse::common::IndexRange,
+    utils::{read_file, FileContent},
+};
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
@@ -21,23 +22,12 @@ use tracing::info;
 use tree_sitter::Node;
 
 static PROTOTYPE_ATTR_ARGS: &[&str] = &["type", "loadPriority"];
-static DATA_FIELD_ATTR_ARGS: &[&str] = &[
-    "tag",
-    "readOnly",
-    "priority",
-    "required",
-    "serverOnly",
-    "customTypeSerializer",
-];
+static DATA_FIELD_ATTR_ARGS: &[&str] = &["tag", "readOnly", "priority", "required", "serverOnly", "customTypeSerializer"];
 static ID_DATA_FIELD_ATTR_ARGS: &[&str] = &["priority", "customTypeSerializer"];
 
 type Result<T, E = ()> = std::result::Result<T, E>;
 
-pub async fn parse(
-    path: PathBuf,
-    parsed_files: ParsedFiles,
-    cache: Arc<RwLock<ProjectCache>>,
-) -> ParseResult {
+pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -60,18 +50,16 @@ pub async fn parse(
 
     let tree = if let Some(old_tree) = old_tree {
         parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
-    } else {
+    }
+    else {
         parser.parse(src.deref(), None)
     };
 
     drop(lock);
-    
+
     if let Some(tree) = tree {
         let tree = Arc::new(Mutex::new(tree));
-        parsed_files
-            .write()
-            .await
-            .insert(path.clone(), Arc::clone(&tree));
+        parsed_files.write().await.insert(path.clone(), Arc::clone(&tree));
 
         let tree = tree.lock().await;
         let root_node = tree.root_node();
@@ -93,10 +81,7 @@ pub async fn parse(
             }
         }
 
-        cache
-            .write()
-            .await
-            .insert(key, CacheContent::Csharp(&objects));
+        cache.write().await.insert(key, CacheContent::Csharp(&objects));
 
         return ParseResult::Csharp(objects);
     }
@@ -135,8 +120,7 @@ impl ParseFromNode for CsharpObject {
                     }
                 }
                 "attribute_list" => {
-                    attributes
-                        .extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter());
+                    attributes.extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter());
                 }
                 "declaration_list" => {
                     // class body
@@ -184,8 +168,7 @@ impl ParseFromNode for CsharpClassField {
         if node.kind() == "field_declaration" {
             for node in node.named_children(&mut cursor) {
                 match node.kind() {
-                    "attribute_list" => attributes
-                        .extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter()),
+                    "attribute_list" => attributes.extend(Vec::<CsharpAttribute>::get(node, src.clone(), path)?.into_iter()),
                     "modifier" => {
                         let modifier = node.utf8_text(source.as_bytes()).unwrap().to_owned();
                         modifiers.insert(modifier);
@@ -193,15 +176,12 @@ impl ParseFromNode for CsharpClassField {
                     "variable_declaration" => {
                         let type_node = node.child_by_field_name("type");
                         if let Some(type_node) = type_node {
-                            type_name =
-                                Some(type_node.utf8_text(source.as_bytes()).unwrap().to_owned());
+                            type_name = Some(type_node.utf8_text(source.as_bytes()).unwrap().to_owned());
                             let declarator_node = type_node.next_named_sibling();
                             if let Some(declarator_node) = declarator_node {
                                 let name_node = declarator_node.child_by_field_name("name");
                                 if let Some(name_node) = name_node {
-                                    field_name = Some(
-                                        name_node.utf8_text(source.as_bytes()).unwrap().to_owned(),
-                                    );
+                                    field_name = Some(name_node.utf8_text(source.as_bytes()).unwrap().to_owned());
                                     name_range = Some(name_node.range());
                                 }
                             }
@@ -210,11 +190,9 @@ impl ParseFromNode for CsharpClassField {
                     _ => {}
                 }
             }
-        } else if node.kind() == "property_declaration" {
-            match (
-                node.child_by_field_name("type"),
-                node.child_by_field_name("name"),
-            ) {
+        }
+        else if node.kind() == "property_declaration" {
+            match (node.child_by_field_name("type"), node.child_by_field_name("name")) {
                 (Some(type_node), Some(name_node)) => {
                     field_name = Some(name_node.utf8_text(source.as_bytes()).unwrap().to_owned());
                     name_range = Some(name_node.range());
@@ -225,9 +203,7 @@ impl ParseFromNode for CsharpClassField {
 
             for prop_node in node.named_children(&mut cursor) {
                 match prop_node.kind() {
-                    "attribute_list" => attributes.extend(
-                        Vec::<CsharpAttribute>::get(prop_node, src.clone(), path)?.into_iter(),
-                    ),
+                    "attribute_list" => attributes.extend(Vec::<CsharpAttribute>::get(prop_node, src.clone(), path)?.into_iter()),
                     "modifier" => {
                         let modifier = prop_node.utf8_text(source.as_bytes()).unwrap().to_owned();
                         modifiers.insert(modifier);
@@ -270,17 +246,14 @@ impl ParseFromNode for Vec<CsharpAttribute> {
 
                 match attr_within_node.kind() {
                     "identifier" => {
-                        let name = attr_within_node
-                            .utf8_text(src.as_bytes())
-                            .unwrap()
-                            .to_owned();
+                        let name = attr_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
 
-                        attr_name =
-                            Some(if let Some(normalized) = name.strip_suffix("Attribute") {
-                                normalized.to_owned()
-                            } else {
-                                name
-                            });
+                        attr_name = Some(if let Some(normalized) = name.strip_suffix("Attribute") {
+                            normalized.to_owned()
+                        }
+                        else {
+                            name
+                        });
                     }
                     "attribute_argument_list" => {
                         let mut arg_index = 0;
@@ -298,60 +271,35 @@ impl ParseFromNode for Vec<CsharpAttribute> {
 
                                 match arg_within_node.kind() {
                                     "identifier" => {
-                                        let name = arg_within_node
-                                            .utf8_text(src.as_bytes())
-                                            .unwrap()
-                                            .to_owned();
+                                        let name = arg_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
 
-                                        arg_name = Some(
-                                            if arg_within_node.next_sibling().is_none()
-                                                && name == "ProtoName"
-                                            {
-                                                "audioMetadata".to_owned()
-                                            } else {
-                                                name
-                                            },
-                                        );
+                                        arg_name = Some(if arg_within_node.next_sibling().is_none() && name == "ProtoName" {
+                                            "audioMetadata".to_owned()
+                                        }
+                                        else {
+                                            name
+                                        });
                                     }
                                     "string_literal" => {
                                         if cursor.goto_first_child() {
                                             // string_literal_content
-                                            let value = arg_within_node
-                                                .utf8_text(src.as_bytes())
-                                                .unwrap()
-                                                .to_owned();
-                                            arg_value =
-                                                Some(CsharpAttributeArgumentType::String(value));
+                                            let value = arg_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                            arg_value = Some(CsharpAttributeArgumentType::String(value));
 
                                             cursor.goto_first_child();
                                         }
                                     }
                                     "boolean_literal" => {
-                                        let value = arg_within_node
-                                            .utf8_text(src.as_bytes())
-                                            .unwrap()
-                                            .to_owned();
-                                        arg_value = Some(CsharpAttributeArgumentType::Bool(
-                                            value.parse().unwrap(),
-                                        ));
+                                        let value = arg_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                        arg_value = Some(CsharpAttributeArgumentType::Bool(value.parse().unwrap()));
                                     }
                                     "real_literal" => {
-                                        let value = arg_within_node
-                                            .utf8_text(src.as_bytes())
-                                            .unwrap()
-                                            .to_owned();
-                                        arg_value = Some(CsharpAttributeArgumentType::Real(
-                                            value.parse().unwrap(),
-                                        ));
+                                        let value = arg_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                        arg_value = Some(CsharpAttributeArgumentType::Real(value.parse().unwrap()));
                                     }
                                     "integer_literal" => {
-                                        let value = arg_within_node
-                                            .utf8_text(src.as_bytes())
-                                            .unwrap()
-                                            .to_owned();
-                                        arg_value = Some(CsharpAttributeArgumentType::Int(
-                                            value.parse().unwrap(),
-                                        ));
+                                        let value = arg_within_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                        arg_value = Some(CsharpAttributeArgumentType::Int(value.parse().unwrap()));
                                     }
                                     "prefix_unary_expression" => {
                                         let unary_val_node = cursor.node();
@@ -360,24 +308,12 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                             // prefix_unary_operator
                                             match cursor.node().kind() {
                                                 "integer_literal" => {
-                                                    let value = unary_val_node
-                                                        .utf8_text(src.as_bytes())
-                                                        .unwrap()
-                                                        .to_owned();
-                                                    arg_value =
-                                                        Some(CsharpAttributeArgumentType::Int(
-                                                            value.parse().unwrap(),
-                                                        ));
+                                                    let value = unary_val_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                                    arg_value = Some(CsharpAttributeArgumentType::Int(value.parse().unwrap()));
                                                 }
                                                 "real_literal" => {
-                                                    let value = unary_val_node
-                                                        .utf8_text(src.as_bytes())
-                                                        .unwrap()
-                                                        .to_owned();
-                                                    arg_value =
-                                                        Some(CsharpAttributeArgumentType::Real(
-                                                            value.parse().unwrap(),
-                                                        ));
+                                                    let value = unary_val_node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                                    arg_value = Some(CsharpAttributeArgumentType::Real(value.parse().unwrap()));
                                                 }
                                                 _ => {}
                                             }
@@ -390,18 +326,10 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                         for node in arg_within_node.named_children(&mut cursor) {
                                             match node.kind() {
                                                 "identifier" => {
-                                                    let value = node
-                                                        .utf8_text(src.as_bytes())
-                                                        .unwrap()
-                                                        .to_owned();
-                                                    arg_value =
-                                                        Some(CsharpAttributeArgumentType::TypeOf(
-                                                            Box::new(
-                                                                CsharpAttributeArgumentType::String(
-                                                                    value,
-                                                                ),
-                                                            ),
-                                                        ));
+                                                    let value = node.utf8_text(src.as_bytes()).unwrap().to_owned();
+                                                    arg_value = Some(CsharpAttributeArgumentType::TypeOf(Box::new(
+                                                        CsharpAttributeArgumentType::String(value),
+                                                    )));
                                                 }
                                                 "generic_name" => {
                                                     // TODO
@@ -420,49 +348,44 @@ impl ParseFromNode for Vec<CsharpAttribute> {
                                 let name = if let Some(arg_name1) = arg_name {
                                     // an argument of attribute may contain a name
                                     arg_name1
-                                } else if attr_name.is_some() {
+                                }
+                                else if attr_name.is_some() {
                                     // if an attribute name has been found
                                     let attr_name = attr_name.clone().unwrap();
                                     match attr_name.as_str() {
                                         // check if an argument is valid
                                         "Prototype" => {
                                             // otherwise skip it
-                                            if PROTOTYPE_ATTR_ARGS.len() > arg_index
-                                                && !args
-                                                    .contains_key(PROTOTYPE_ATTR_ARGS[arg_index])
-                                            {
+                                            if PROTOTYPE_ATTR_ARGS.len() > arg_index && !args.contains_key(PROTOTYPE_ATTR_ARGS[arg_index]) {
                                                 PROTOTYPE_ATTR_ARGS[arg_index].to_owned()
-                                            } else {
+                                            }
+                                            else {
                                                 cursor.goto_parent();
                                                 continue;
                                             }
                                         }
                                         "DataField" => {
-                                            if DATA_FIELD_ATTR_ARGS.len() > arg_index
-                                                && !args
-                                                    .contains_key(DATA_FIELD_ATTR_ARGS[arg_index])
-                                            {
+                                            if DATA_FIELD_ATTR_ARGS.len() > arg_index && !args.contains_key(DATA_FIELD_ATTR_ARGS[arg_index]) {
                                                 DATA_FIELD_ATTR_ARGS[arg_index].to_owned()
-                                            } else {
+                                            }
+                                            else {
                                                 cursor.goto_parent();
                                                 continue;
                                             }
                                         }
                                         "IdDataField" => {
-                                            if ID_DATA_FIELD_ATTR_ARGS.len() > arg_index
-                                                && !args.contains_key(
-                                                    ID_DATA_FIELD_ATTR_ARGS[arg_index],
-                                                )
-                                            {
+                                            if ID_DATA_FIELD_ATTR_ARGS.len() > arg_index && !args.contains_key(ID_DATA_FIELD_ATTR_ARGS[arg_index]) {
                                                 ID_DATA_FIELD_ATTR_ARGS[arg_index].to_owned()
-                                            } else {
+                                            }
+                                            else {
                                                 cursor.goto_parent();
                                                 continue;
                                             }
                                         }
                                         _ => arg_index.to_string(),
                                     }
-                                } else {
+                                }
+                                else {
                                     arg_index.to_string()
                                 };
 

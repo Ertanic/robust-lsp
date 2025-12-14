@@ -1,0 +1,4 @@
+imports_granularity = "Crate"
+condense_wildcard_suffixes = true
+control_brace_style = "ClosingNextLine"
+max_width = 150

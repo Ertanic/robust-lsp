@@ -1,9 +1,9 @@
 use super::InlayHint;
 use crate::{backend::CsharpObjects, parse::structs::csharp::ReflectionManager, utils::block};
 use ropey::Rope;
-use tokio::sync::Mutex;
 use std::sync::Arc;
 use stringcase::camel_case;
+use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{InlayHintKind, InlayHintLabel, Position, Range};
 use tree_sitter::{Node, Tree};
 
@@ -54,7 +54,8 @@ impl InlayHint for YamlInlayHint {
 
         if hints.is_empty() {
             None
-        } else {
+        }
+        else {
             Some(hints)
         }
     }
@@ -64,12 +65,7 @@ impl YamlInlayHint {
     pub fn new(classes: CsharpObjects, range: Range, rope: &Rope, tree: Arc<Mutex<Tree>>) -> Self {
         let src = rope.to_string();
 
-        Self {
-            classes,
-            range,
-            src,
-            tree,
-        }
+        Self { classes, range, src, tree }
     }
 
     fn fields_map_to_hints(&self, fields: Vec<FieldType>) -> Vec<tower_lsp::lsp_types::InlayHint> {
@@ -140,15 +136,10 @@ impl YamlInlayHint {
             .collect()
     }
 
-    fn collect_hints_from_prototype<'a>(
-        &self,
-        block_mapping: Node<'a>,
-    ) -> Option<Vec<FieldType<'a>>> {
+    fn collect_hints_from_prototype<'a>(&self, block_mapping: Node<'a>) -> Option<Vec<FieldType<'a>>> {
         debug_assert_eq!(block_mapping.kind(), "block_mapping");
 
-        let type_node = self
-            .get_field(&block_mapping, "type")?
-            .child_by_field_name("value")?;
+        let type_node = self.get_field(&block_mapping, "type")?.child_by_field_name("value")?;
         let proto_name = type_node.utf8_text(self.src.as_bytes()).ok()?;
 
         let is_entity = proto_name == "entity";
@@ -183,25 +174,21 @@ impl YamlInlayHint {
                 };
 
                 fields.extend(comp_fields);
-            } else if !is_entity {
-                fields.push(FieldType::Prototype(
-                    proto_name.to_owned(),
-                    block_mapping_pair,
-                ));
+            }
+            else if !is_entity {
+                fields.push(FieldType::Prototype(proto_name.to_owned(), block_mapping_pair));
             }
         }
 
         if fields.is_empty() {
             None
-        } else {
+        }
+        else {
             Some(fields)
         }
     }
 
-    fn collect_hints_from_components<'a>(
-        &self,
-        block_node: Node<'a>,
-    ) -> Option<Vec<FieldType<'a>>> {
+    fn collect_hints_from_components<'a>(&self, block_node: Node<'a>) -> Option<Vec<FieldType<'a>>> {
         debug_assert_eq!(block_node.kind(), "block_node");
 
         let block_sequence = find_child_node(block_node, "block_sequence")?;
@@ -252,18 +239,17 @@ impl YamlInlayHint {
 
                 if key_name == "type" {
                     continue;
-                } else if self.in_range(&block_mapping_pair) {
-                    fields.push(FieldType::Component(
-                        comp_name.to_owned(),
-                        block_mapping_pair,
-                    ));
+                }
+                else if self.in_range(&block_mapping_pair) {
+                    fields.push(FieldType::Component(comp_name.to_owned(), block_mapping_pair));
                 }
             }
         }
 
         if fields.is_empty() {
             None
-        } else {
+        }
+        else {
             Some(fields)
         }
     }
@@ -281,11 +267,7 @@ impl YamlInlayHint {
 
         for i in 0..node.named_child_count() {
             let field_node = node.named_child(i)?;
-            let key = field_node
-                .child_by_field_name("key")?
-                .utf8_text(self.src.as_bytes())
-                .ok()?
-                .to_owned();
+            let key = field_node.child_by_field_name("key")?.utf8_text(self.src.as_bytes()).ok()?.to_owned();
 
             if key == name {
                 return Some(field_node);

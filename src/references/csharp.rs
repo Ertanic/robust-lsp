@@ -23,10 +23,7 @@ pub struct CsharpReferencesProvider {
 #[async_trait::async_trait]
 impl ReferencesProvider for CsharpReferencesProvider {
     async fn get_references(&self) -> GetReferencesResult {
-        let point = Point::new(
-            self.position.line as usize,
-            self.position.character as usize,
-        );
+        let point = Point::new(self.position.line as usize, self.position.character as usize);
 
         let tree = self.tree.lock().await;
         let root_node = tree.root_node();
@@ -50,7 +47,8 @@ impl CsharpReferencesProvider {
 
     fn try_get_references_for_class_name(&self, node: Node) -> GetReferencesResult {
         let parent_node = node.parent();
-        let Some(parent_node) = parent_node else {
+        let Some(parent_node) = parent_node
+        else {
             return None;
         };
 
@@ -66,8 +64,7 @@ impl CsharpReferencesProvider {
             .filter(|p| p.prototype == camel_case(value.trim_end_matches("Prototype")))
             .map(|p| {
                 let index = p.index();
-                let uri = Url::from_file_path(index.0.clone())
-                    .expect("Can't get location from file path");
+                let uri = Url::from_file_path(index.0.clone()).expect("Can't get location from file path");
                 let range = index.1.clone().expect("Can't get location from index");
                 Location::new(
                     uri,

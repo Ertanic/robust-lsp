@@ -1,7 +1,6 @@
 use crate::{
     backend::{Context, ParsedFiles},
-    utils::get_ext,
-    utils::{percentage, ProgressStatus, ProgressStatusInit},
+    utils::{get_ext, percentage, ProgressStatus, ProgressStatusInit},
 };
 use futures::future::join_all;
 use itertools::Itertools;
@@ -56,11 +55,7 @@ pub struct ProjectParser<'a> {
 
 impl<'a> ProjectParser<'a> {
     pub fn new(root: &'a Path, context: Arc<Context>, client: Arc<Client>) -> Self {
-        Self {
-            root,
-            context,
-            client,
-        }
+        Self { root, context, client }
     }
 
     pub async fn parse(&self) {
@@ -97,10 +92,7 @@ impl<'a> ProjectParser<'a> {
 
         parser_status.lock().await.finish().await;
 
-        for result in results
-            .into_iter()
-            .filter(|r| !matches!(r, ParseResult::None))
-        {
+        for result in results.into_iter().filter(|r| !matches!(r, ParseResult::None)) {
             let mut classes = self.context.classes.write().await;
             let mut prototypes = self.context.prototypes.write().await;
             let mut locales = self.context.locales.write().await;
@@ -141,12 +133,7 @@ async fn collect_files(folders: Vec<PathBuf>) -> Vec<PathBuf> {
         })
         .collect::<Vec<_>>();
 
-    let files = join_all(tasks)
-        .await
-        .into_iter()
-        .filter_map(Result::ok)
-        .flatten()
-        .collect::<Vec<_>>();
+    let files = join_all(tasks).await.into_iter().filter_map(Result::ok).flatten().collect::<Vec<_>>();
 
     files
 }
@@ -173,23 +160,19 @@ impl ParserHandler {
 
         if self.finished {
             return;
-        } else if self.actual_count == self.total_count {
+        }
+        else if self.actual_count == self.total_count {
             self.finished = true;
             self.status.lock().await.finish(None).await;
-        } else {
+        }
+        else {
             let percent = percentage(self.actual_count, self.total_count);
 
             if self.actual_count.is_multiple_of(100) {
                 self.status
                     .lock()
                     .await
-                    .next_state(
-                        percent,
-                        Some(format!(
-                            "{}/{} ({percent}%)",
-                            self.actual_count, self.total_count
-                        )),
-                    )
+                    .next_state(percent, Some(format!("{}/{} ({percent}%)", self.actual_count, self.total_count)))
                     .await;
             }
         }
@@ -198,7 +181,8 @@ impl ParserHandler {
     pub async fn finish(&mut self) {
         if self.finished {
             return;
-        } else {
+        }
+        else {
             self.finished = true;
             self.status.lock().await.finish(None).await;
         }

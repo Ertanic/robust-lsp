@@ -12,10 +12,8 @@ pub fn init_logger() {
         .with_thread_ids(true);
 
     let targets = filter::Targets::new().with_target("robust_lsp", filter::LevelFilter::TRACE);
-    #[cfg(debug_assertions)] let targets = targets.with_target("tower_lsp", filter::LevelFilter::TRACE);
+    #[cfg(debug_assertions)]
+    let targets = targets.with_target("tower_lsp", filter::LevelFilter::TRACE);
 
-    tracing_subscriber::registry()
-        .with(targets)
-        .with(fmt_layer)
-        .init();
+    tracing_subscriber::registry().with(targets).with(fmt_layer).init();
 }

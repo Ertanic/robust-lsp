@@ -1,7 +1,6 @@
 use crate::utils::span_to_range;
 use fluent_syntax::ast::{
-    CallArguments, Comment, Expression, InlineExpression, Message, NamedArgument, Pattern,
-    PatternElement, Term, Variant, VariantKey,
+    CallArguments, Comment, Expression, InlineExpression, Message, NamedArgument, Pattern, PatternElement, Term, Variant, VariantKey,
 };
 use tower_lsp::lsp_types::SemanticToken;
 use tree_sitter::Range;
@@ -38,7 +37,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.comment_to_semantic(comment),
                 create_absolute_token(range, SemanticTokenType::EnumMember),
             ]
-        } else {
+        }
+        else {
             vec![create_absolute_token(range, SemanticTokenType::EnumMember)]
         };
 
@@ -57,14 +57,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.comment_to_semantic(comment),
                 create_absolute_token(range, SemanticTokenType::EnumMember),
             ]
-        } else {
+        }
+        else {
             vec![create_absolute_token(range, SemanticTokenType::EnumMember)]
         };
 
         if let Some(Pattern { elements, .. }) = msg.value {
-            elements
-                .into_iter()
-                .for_each(|el| result.extend(self.pattern_element_to_semantic(el)));
+            elements.into_iter().for_each(|el| result.extend(self.pattern_element_to_semantic(el)));
         }
 
         result
@@ -87,14 +86,10 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn expr_to_semantic(&self, expr: Expression<&str>) -> Vec<AbsoluteToken> {
         match expr {
-            Expression::Select {
-                selector, variants, ..
-            } => {
+            Expression::Select { selector, variants, .. } => {
                 let mut result = self.inline_expr_to_semantic(selector);
 
-                variants
-                    .into_iter()
-                    .for_each(|var| result.extend(self.variant_to_semantic(var)));
+                variants.into_iter().for_each(|var| result.extend(self.variant_to_semantic(var)));
 
                 result
             }
@@ -115,10 +110,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 VariantKey::NumberLiteral { span, .. } => span,
             },
         );
-        let mut result = vec![create_absolute_token(
-            key_range,
-            SemanticTokenType::Operator,
-        )];
+        let mut result = vec![create_absolute_token(key_range, SemanticTokenType::Operator)];
 
         var.value
             .elements
@@ -138,9 +130,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let range = span_to_range(self.content, &span);
                 vec![create_absolute_token(range, SemanticTokenType::Number)]
             }
-            InlineExpression::FunctionReference {
-                span, arguments, ..
-            } => {
+            InlineExpression::FunctionReference { span, arguments, .. } => {
                 let range = span_to_range(self.content, &span);
                 let mut result = vec![create_absolute_token(range, SemanticTokenType::Function)];
                 result.extend(self.func_arguments_to_semantic(arguments));
@@ -163,10 +153,7 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn func_arguments_to_semantic(&self, arg: CallArguments<&str>) -> Vec<AbsoluteToken> {
-        let named_args = arg
-            .named
-            .into_iter()
-            .flat_map(|named| self.named_func_argument_to_semantic(named));
+        let named_args = arg.named.into_iter().flat_map(|named| self.named_func_argument_to_semantic(named));
 
         arg.positional
             .into_iter()
@@ -175,10 +162,7 @@ impl<'a> SemanticAnalyzer<'a> {
             .collect()
     }
 
-    fn named_func_argument_to_semantic(
-        &self,
-        named_arg: NamedArgument<&str>,
-    ) -> Vec<AbsoluteToken> {
+    fn named_func_argument_to_semantic(&self, named_arg: NamedArgument<&str>) -> Vec<AbsoluteToken> {
         let range = span_to_range(self.content, &named_arg.name.span);
         let mut result = vec![create_absolute_token(range, SemanticTokenType::Parameter)];
         result.extend(self.inline_expr_to_semantic(named_arg.value));

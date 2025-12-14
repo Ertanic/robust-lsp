@@ -14,10 +14,7 @@ pub struct IndexPoint {
 
 impl From<tree_sitter::Point> for IndexPoint {
     fn from(Point { row, column }: Point) -> Self {
-        Self {
-            start: row,
-            end: column,
-        }
+        Self { start: row, end: column }
     }
 }
 

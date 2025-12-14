@@ -29,10 +29,7 @@ pub struct YamlGotoDefinition {
 #[async_trait::async_trait]
 impl GotoDefinition for YamlGotoDefinition {
     async fn goto_definition(&self) -> GotoDefinitionResult {
-        let point = Point::new(
-            self.position.line as usize,
-            self.position.character as usize,
-        );
+        let point = Point::new(self.position.line as usize, self.position.character as usize);
 
         let tree = self.tree.lock().await;
         let root_node = tree.root_node();
@@ -54,13 +51,7 @@ impl GotoDefinition for YamlGotoDefinition {
 }
 
 impl YamlGotoDefinition {
-    pub fn new(
-        context: Arc<Context>,
-        position: Position,
-        rope: &Rope,
-        tree: Arc<Mutex<Tree>>,
-        project_root: PathBuf,
-    ) -> Self {
+    pub fn new(context: Arc<Context>, position: Position, rope: &Rope, tree: Arc<Mutex<Tree>>, project_root: PathBuf) -> Self {
         let src = rope.to_string();
 
         Self {
@@ -72,11 +63,7 @@ impl YamlGotoDefinition {
         }
     }
 
-    fn try_goto_protoid_definition(
-        &self,
-        found_node: Node<'_>,
-        nest: usize,
-    ) -> GotoDefinitionResult {
+    fn try_goto_protoid_definition(&self, found_node: Node<'_>, nest: usize) -> GotoDefinitionResult {
         debug_assert!(nest >= 4);
 
         let block_mapping_pair = {
@@ -131,31 +118,17 @@ impl YamlGotoDefinition {
             tracing::trace!(
                 "{} == {} && {}",
                 p.prototype,
-                camel_case(
-                    type_name
-                        .trim_end_matches("Prototype")
-                        .trim_end_matches(">")
-                ),
+                camel_case(type_name.trim_end_matches("Prototype").trim_end_matches(">")),
                 id
             );
-            p.prototype
-                == camel_case(
-                    type_name
-                        .trim_end_matches(">")
-                        .trim_end_matches("Prototype"),
-                )
-                && p.id == id
+            p.prototype == camel_case(type_name.trim_end_matches(">").trim_end_matches("Prototype")) && p.id == id
         })?;
 
         let location = get_location_link(proto.index(), value_node)?;
         Some(GotoDefinitionResponse::Link(vec![location]))
     }
 
-    fn try_goto_sprite_definition(
-        &self,
-        found_node: Node<'_>,
-        nest: usize,
-    ) -> GotoDefinitionResult {
+    fn try_goto_sprite_definition(&self, found_node: Node<'_>, nest: usize) -> GotoDefinitionResult {
         debug_assert!(nest >= 4);
 
         let block_mapping_pair = {
@@ -202,9 +175,7 @@ impl YamlGotoDefinition {
             return None;
         }
 
-        let rsi_path = self
-            .project_root
-            .join(format!("Resources/Textures/{}/meta.json", value));
+        let rsi_path = self.project_root.join(format!("Resources/Textures/{}/meta.json", value));
 
         let location = LocationLink {
             origin_selection_range: Some(lsp_types::Range {
@@ -332,10 +303,7 @@ impl YamlGotoDefinition {
 
         match key_name {
             "type" => {
-                let value = mapping_pair_node
-                    .child_by_field_name("value")?
-                    .utf8_text(self.src.as_bytes())
-                    .ok()?;
+                let value = mapping_pair_node.child_by_field_name("value")?.utf8_text(self.src.as_bytes()).ok()?;
 
                 if seeking != value {
                     return None;
@@ -395,10 +363,7 @@ impl YamlGotoDefinition {
 
         match key_name {
             "type" => {
-                let value = mapping_pair_node
-                    .child_by_field_name("value")?
-                    .utf8_text(self.src.as_bytes())
-                    .ok()?;
+                let value = mapping_pair_node.child_by_field_name("value")?.utf8_text(self.src.as_bytes()).ok()?;
 
                 if seeking != value {
                     return None;
@@ -413,20 +378,14 @@ impl YamlGotoDefinition {
                 self.index_to_definition(index)
             }
             "parent" => {
-                let value = mapping_pair_node
-                    .child_by_field_name("value")?
-                    .utf8_text(self.src.as_bytes())
-                    .ok()?;
+                let value = mapping_pair_node.child_by_field_name("value")?.utf8_text(self.src.as_bytes()).ok()?;
 
                 if seeking != value {
                     return None;
                 }
 
                 let type_field_node = self.get_field(&mapping_pair_node.parent()?, "type")?;
-                let type_field_value = type_field_node
-                    .child_by_field_name("value")?
-                    .utf8_text(self.src.as_bytes())
-                    .ok()?;
+                let type_field_value = type_field_node.child_by_field_name("value")?.utf8_text(self.src.as_bytes()).ok()?;
 
                 let lock = block_in_place(|| self.context.prototypes.blocking_read());
                 let prototype = lock
@@ -469,10 +428,7 @@ impl YamlGotoDefinition {
         let (start_position, end_position) = {
             let range = index.1.clone()?;
             (
-                Position::new(
-                    range.start_point.start as u32,
-                    range.start_point.end as u32,
-                ),
+                Position::new(range.start_point.start as u32, range.start_point.end as u32),
                 Position::new(range.end_point.start as u32, range.end_point.end as u32),
             )
         };
@@ -501,11 +457,7 @@ impl YamlGotoDefinition {
 
         for i in 0..node.named_child_count() {
             let field_node = node.named_child(i)?;
-            let key = field_node
-                .child_by_field_name("key")?
-                .utf8_text(self.src.as_bytes())
-                .ok()?
-                .to_owned();
+            let key = field_node.child_by_field_name("key")?.utf8_text(self.src.as_bytes()).ok()?.to_owned();
 
             if key == name {
                 return Some(field_node);
@@ -516,7 +468,8 @@ impl YamlGotoDefinition {
 }
 
 fn get_location_link(index: &DefinitionIndex, node: Node) -> Option<LocationLink> {
-    let DefinitionIndex(path, Some(locale_range)) = index else {
+    let DefinitionIndex(path, Some(locale_range)) = index
+    else {
         return None;
     };
     let url_range = lsp_types::Range {

@@ -4,15 +4,15 @@ use log::init_logger;
 use tower_lsp::{LspService, Server};
 
 mod backend;
+mod cache;
 mod completion;
 mod goto;
 mod hint;
 mod log;
 mod parse;
-mod utils;
 mod references;
-mod cache;
 mod semantic;
+mod utils;
 
 #[tokio::main]
 async fn main() {

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use bincode::{Decode, Encode};
 use crate::parse::common::{DefinitionIndex, Index};
+use bincode::{Decode, Encode};
 
 #[derive(Debug, Clone, Default, Encode, Decode)]
 pub struct FluentKey {
@@ -26,11 +26,7 @@ impl Index for FluentKey {
 }
 
 impl FluentKey {
-    pub fn new(
-        key: String,
-        args: std::collections::HashSet<String>,
-        index: DefinitionIndex,
-    ) -> Self {
+    pub fn new(key: String, args: std::collections::HashSet<String>, index: DefinitionIndex) -> Self {
         Self { key, args, index }
     }
 

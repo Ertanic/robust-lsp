@@ -1,7 +1,9 @@
 use super::{common::DefinitionIndex, structs::fluent::FluentKey};
-use crate::cache::{CacheContent, CacheContext, CacheKey};
-use crate::utils::{read_file, span_to_range, FileContent};
-use crate::{cache::ProjectCache, parse::ParseResult};
+use crate::{
+    cache::{CacheContent, CacheContext, CacheKey, ProjectCache},
+    parse::ParseResult,
+    utils::{read_file, span_to_range, FileContent},
+};
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
@@ -18,7 +20,8 @@ pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResu
     }
 
     let content = Arc::new(content);
-    let Ok(resource) = fluent_syntax::parser::parse(&**content) else {
+    let Ok(resource) = fluent_syntax::parser::parse(&**content)
+    else {
         return ParseResult::None;
     };
 
@@ -41,9 +44,7 @@ pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResu
                 })
                 .filter_map(|expr| match expr {
                     // TODO: Get variables from functions calls
-                    Expression::Inline(InlineExpression::VariableReference { id, .. }, ..) => {
-                        Some(id.name.to_owned())
-                    }
+                    Expression::Inline(InlineExpression::VariableReference { id, .. }, ..) => Some(id.name.to_owned()),
                     Expression::Select {
                         selector: InlineExpression::VariableReference { id, .. },
                         ..
@@ -59,10 +60,7 @@ pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResu
         })
         .collect();
 
-    cache
-        .write()
-        .await
-        .insert(key, CacheContent::Fluent(&keys));
+    cache.write().await.insert(key, CacheContent::Fluent(&keys));
 
     ParseResult::Fluent(keys)
 }

@@ -228,7 +228,7 @@ impl LanguageServer for Backend {
                             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
                             .unwrap();
 
-                        let new_tree = parser.parse(rope_guard.to_string(), Some(tree.deref()));
+                        let new_tree = parser.parse(rope_guard.to_string(), None);
 
                         if let Some(new_tree) = new_tree {
                             let tree = Arc::new(new_tree);
@@ -252,7 +252,7 @@ impl LanguageServer for Backend {
                     "yaml" | "yml" => {
                         parser.set_language(&tree_sitter_yaml::language()).unwrap();
 
-                        let new_tree = parser.parse(rope_guard.to_string(), Some(tree.deref()));
+                        let new_tree = parser.parse(rope_guard.to_string(), None);
 
                         if let Some(new_tree) = new_tree {
                             let tree = Arc::new(new_tree);

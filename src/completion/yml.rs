@@ -20,6 +20,7 @@ use tracing::instrument;
 use tree_sitter::{Node, Point, Tree};
 
 const SPRITES_RES_PATH: &str = "Resources/Textures/";
+const RESOURCES_PATH: &str = "Resources/";
 
 pub struct YamlCompletion {
     context: Arc<Context>,
@@ -742,6 +743,124 @@ impl YamlCompletion {
                 };
 
                 locales
+            }
+            "ResPath" => {
+                let res_folder = self.root_path.join(RESOURCES_PATH);
+                if !res_folder.exists() {
+                    return None;
+                }
+
+                let paths = match node.child_by_field_name("value") {
+                    Some(value_node) => {
+                        let value = value_node.utf8_text(self.src.as_bytes()).ok()?;
+                        if value.ends_with('/') {
+                            let path = res_folder.join(value);
+                            if !path.exists() || !path.is_dir() {
+                                tracing::trace!("{path:?} does not exist");
+                                return None;
+                            }
+
+                            let paths = fs::read_dir(path)
+                                .ok()?
+                                .filter_map(Result::ok)
+                                .map(|f| {
+                                    let path = f.path();
+                                    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                    let is_file = path.is_file();
+                                    CompletionItem {
+                                        label: name.clone(),
+                                        kind: Some(if is_file { CompletionItemKind::FILE } else { CompletionItemKind::FOLDER }),
+                                        insert_text: Some(if is_file { name } else { format!("{name}/") }),
+                                        ..Default::default()
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            paths
+                        }
+                        else {
+                            let parts = value.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>();
+                            let last = parts.last()?.to_owned();
+
+                            let parts_count = parts.len();
+                            let files_path = if parts_count == 1 {
+                                res_folder
+                            }
+                            else {
+                                res_folder.join(parts.into_iter().take(parts_count - 1).collect::<PathBuf>())
+                            };
+                            if !files_path.exists() || !files_path.is_dir() {
+                                tracing::trace!("{files_path:?} does not exist");
+                                return None;
+                            }
+
+                            let mut paths = fs::read_dir(files_path)
+                                .ok()?
+                                .filter_map(Result::ok)
+                                .map(|f| {
+                                    let path = f.path();
+                                    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                    (strsim::jaro_winkler(last, &name), name, path)
+                                })
+                                .filter(|(diff, ..)| *diff > 0.6)
+                                .map(|(diff, name, path)| {
+                                    let is_file = path.is_file();
+                                    (
+                                        diff,
+                                        CompletionItem {
+                                            label: name.clone(),
+                                            kind: Some(if is_file { CompletionItemKind::FILE } else { CompletionItemKind::FOLDER }),
+                                            insert_text: Some(if is_file { name } else { format!("{name}/") }),
+                                            ..Default::default()
+                                        },
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            paths.sort_by_key(|p| (p.0 * 100.0) as u32);
+                            paths.reverse();
+                            paths.truncate(100);
+
+                            paths.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
+                        }
+                    }
+                    None => {
+                        let paths = fs::read_dir(res_folder)
+                            .ok()?
+                            .filter_map(Result::ok)
+                            .map(|f| {
+                                let path = f.path();
+                                let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+
+                                if path.is_file() {
+                                    CompletionItem {
+                                        label: name.clone(),
+                                        kind: Some(CompletionItemKind::FILE),
+                                        insert_text: Some(format!("{name}/")),
+                                        ..Default::default()
+                                    }
+                                }
+                                else {
+                                    CompletionItem {
+                                        label: name.clone(),
+                                        kind: Some(if path.is_dir() {
+                                            CompletionItemKind::FOLDER
+                                        }
+                                        else {
+                                            CompletionItemKind::FILE
+                                        }),
+                                        insert_text: Some(format!("{name}/")),
+                                        ..Default::default()
+                                    }
+                                }
+                            })
+                            .collect();
+
+                        paths
+                    }
+                };
+
+                paths
             }
             _ => vec![],
         };

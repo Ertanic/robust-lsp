@@ -136,9 +136,24 @@ pub struct Component {
 
 impl Component {
     pub fn get_component_name(&self) -> String {
-        let name = self.class.name.strip_suffix("Component").unwrap_or(self.class.name.as_str());
+        let mut name = None;
 
-        stringcase::pascal_case(name)
+        if let Some(attr) = self.class.attributes.get("ComponentProtoName") {
+            if let Some(type_name) = attr.arguments.get("0") {
+                if let CsharpAttributeArgumentType::String(type_name) = &type_name.value {
+                    let type_name = stringcase::pascal_case(type_name.trim_matches('\"'));
+                    name = Some(type_name);
+                }
+            }
+        }
+
+        if name.is_none() {
+            let raw_name = self.class.name.strip_suffix("Component").unwrap_or(self.class.name.as_str());
+            let pascal_case = stringcase::pascal_case(raw_name);
+            name = Some(pascal_case);
+        }
+
+        name.unwrap()
     }
 }
 

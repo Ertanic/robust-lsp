@@ -222,6 +222,8 @@ impl LanguageServer for Backend {
                 }
                 _ => {}
             }
+
+            analyze_code(&path, self.context.clone()).await;
         }
         else {
             tracing::warn!("File wasn't cached.");

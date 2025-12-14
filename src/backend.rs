@@ -371,7 +371,7 @@ impl LanguageServer for Backend {
                             Arc::clone(tree),
                             root_path
                         );
-                        Ok(completion.completion())
+                        Ok(completion.completion().await)
                 } else  {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)

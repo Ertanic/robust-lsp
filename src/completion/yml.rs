@@ -5,13 +5,12 @@ use crate::{
         csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
         json::RsiMeta,
     },
-    utils::{block, get_columns},
+    utils::get_columns,
 };
 use rayon::prelude::*;
 use ropey::Rope;
 use std::{fs, path::PathBuf, sync::Arc};
 use stringcase::camel_case;
-use tokio::task::block_in_place;
 use tower_lsp::lsp_types::{
     self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
     CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
@@ -29,8 +28,9 @@ pub struct YamlCompletion {
     root_path: PathBuf,
 }
 
+#[async_trait::async_trait]
 impl Completion for YamlCompletion {
-    fn completion(&self) -> CompletionResult {
+    async fn completion(&self) -> CompletionResult {
         let (start_col, end_col) = get_columns(self.position, &self.src);
         let start_point = Point::new(self.position.line as usize, start_col);
         let end_point = Point::new(self.position.line as usize, end_col);
@@ -57,18 +57,18 @@ impl Completion for YamlCompletion {
         tracing::trace!("Work with node {found_node:?}");
 
         match found_node.kind() {
-            "block_mapping_pair" => self.block_mapping_pair(found_node),
-            "block_mapping" => self.block_mapping(found_node),
+            "block_mapping_pair" => self.block_mapping_pair(found_node).await,
+            "block_mapping" => self.block_mapping(found_node).await,
             "block_sequence_item" => self.block_sequence_item(found_node),
             "block_sequence" => {
                 let block_mapping = self.find_block_mapping(found_node)?;
-                self.block_mapping(block_mapping)
+                self.block_mapping(block_mapping).await
             }
             "flow_sequence" => {
                 let flow_item = self.find_flow_item(found_node)?;
                 match flow_item.kind() {
-                    "flow_node" => self.flow_node(flow_item),
-                    "flow_sequence" => self.flow_sequence(flow_item),
+                    "flow_node" => self.flow_node(flow_item).await,
+                    "flow_sequence" => self.flow_sequence(flow_item).await,
                     _ => None,
                 }
             }
@@ -278,7 +278,7 @@ impl YamlCompletion {
         }
     }
 
-    fn block_mapping_pair(&self, node: Node) -> CompletionResult {
+    async fn block_mapping_pair<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let nest = self.get_nesting(&node);
@@ -287,38 +287,38 @@ impl YamlCompletion {
 
         if key_name == "type" {
             match nest {
-                2 => return self.prototype_completion(node, key_node),
-                4 => return self.components_completion(node, key_node),
+                2 => return self.prototype_completion(node, key_node).await,
+                4 => return self.components_completion(node, key_node).await,
                 _ => None,
             }
         } else if key_name == "parent" && nest == 2 {
-            self.prototype_parents_completion(node)
+            self.prototype_parents_completion(node).await
         } else {
-            self.object_field_type_completion(node)
+            self.object_field_type_completion(node).await
         }
     }
 
-    fn block_mapping(&self, node: Node) -> CompletionResult {
+    async fn block_mapping<'a>(&self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping");
 
         if self.get_nesting(&node) > 2 {
-            self.component_fields_completion(node)
+            self.component_fields_completion(node).await
         } else {
-            self.prototype_fields_completion(node)
+            self.prototype_fields_completion(node).await
         }
     }
 
-    fn flow_node(&self, node: Node) -> CompletionResult {
+    async fn flow_node<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "flow_node");
-        self.prototype_parents_completion(node)
+        self.prototype_parents_completion(node).await
     }
 
-    fn flow_sequence(&self, node: Node) -> CompletionResult {
+    async fn flow_sequence<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "flow_sequence");
-        self.prototype_parents_completion(node)
+        self.prototype_parents_completion(node).await
     }
 
-    fn object_field_type_completion(&self, node: Node) -> CompletionResult {
+    async fn object_field_type_completion<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let key_node = node.child_by_field_name("key")?;
@@ -328,24 +328,32 @@ impl YamlCompletion {
         let reflection = ReflectionManager::new(self.context.classes.clone());
 
         match self.get_nesting(&node) {
-            2 => self.prototype_field_type_completion(node, reflection, obj_name, key_name),
-            4 => self.component_field_type_completion(node, reflection, obj_name, key_name),
+            2 => {
+                self.prototype_field_type_completion(node, reflection, obj_name, key_name)
+                    .await
+            }
+            4 => {
+                self.component_field_type_completion(node, reflection, obj_name, key_name)
+                    .await
+            }
             _ => None,
         }
     }
 
     #[instrument(skip_all, ret)]
-    fn component_field_type_completion(
-        &self,
-        node: Node,
+    async fn component_field_type_completion<'a>(
+        &'a self,
+        node: Node<'a>,
         reflection: ReflectionManager,
         object_name: &str,
         key_name: &str,
     ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        let comp = block(|| reflection.get_component_by_name(object_name))?;
-        let field = block(|| reflection.get_fields(Arc::clone(&comp)))
+        let comp = reflection.get_component_by_name(object_name).await?;
+        let field = reflection
+            .get_fields(Arc::clone(&comp))
+            .await
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
@@ -355,7 +363,7 @@ impl YamlCompletion {
         ) {
             ("Sprite" | "Icon", "sprite") => self.sprite_field_type_completion(node),
             ("Sprite", "state") => self.state_field_type_completion(node),
-            _ => self.field_type_completion(node, field, reflection),
+            _ => self.field_type_completion(node, field, reflection).await,
         }
     }
 
@@ -603,26 +611,28 @@ impl YamlCompletion {
         }
     }
 
-    fn prototype_field_type_completion(
-        &self,
-        node: Node,
+    async fn prototype_field_type_completion<'a>(
+        &'a self,
+        node: Node<'a>,
         reflection: ReflectionManager,
         object_name: &str,
         key_name: &str,
     ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
-        let prototype = block(|| reflection.get_prototype_by_name(object_name))?;
-        let field = block(|| reflection.get_fields(Arc::clone(&prototype)))
+        let prototype = reflection.get_prototype_by_name(object_name).await?;
+        let field = reflection
+            .get_fields(Arc::clone(&prototype))
+            .await
             .into_iter()
             .find(|f| f.get_data_field_name() == key_name)?;
 
-        self.field_type_completion(node, field, reflection)
+        self.field_type_completion(node, field, reflection).await
     }
 
-    fn field_type_completion(
-        &self,
-        node: Node,
+    async fn field_type_completion<'a>(
+        &'a self,
+        node: Node<'a>,
         field: CsharpClassField,
         reflection: ReflectionManager,
     ) -> CompletionResult {
@@ -638,7 +648,7 @@ impl YamlCompletion {
                 })
                 .collect::<Vec<_>>(),
             "EntProtoId" => {
-                let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
+                let lock = self.context.prototypes.read().await;
                 let entity_prototypes = lock.par_iter().filter(|p| p.prototype == "entity");
 
                 let prototypes = match node.child_by_field_name("value") {
@@ -685,10 +695,10 @@ impl YamlCompletion {
             }
             value if value.starts_with("ProtoId<") => {
                 let inner = value.trim_start_matches("ProtoId<").trim_end_matches('>');
-                let prototype = block(|| reflection.get_prototype_by_name(inner))?;
+                let prototype = reflection.get_prototype_by_name(inner).await?;
                 let prototype_name = camel_case(&prototype.get_prototype_name());
 
-                let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
+                let lock = self.context.prototypes.read().await;
                 let filtered_prototypes = lock.par_iter().filter(|p| p.prototype == prototype_name);
 
                 let map = |l: String| CompletionItem {
@@ -726,7 +736,7 @@ impl YamlCompletion {
                 prototypes
             }
             "LocId" => {
-                let lock = block_in_place(|| self.context.locales.blocking_read());
+                let lock = self.context.locales.read().await;
                 let map = |key: String, range: Option<Range>| CompletionItem {
                     label: key.clone(),
                     kind: Some(CompletionItemKind::VALUE),
@@ -801,7 +811,7 @@ impl YamlCompletion {
     }
 
     // Is that even a little bit readable? I don't know how else to rewrite it better...
-    fn prototype_parents_completion(&self, node: Node) -> CompletionResult {
+    async fn prototype_parents_completion<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert!(
             node.kind() == "flow_sequence"
                 || node.kind() == "flow_node"
@@ -827,15 +837,16 @@ impl YamlCompletion {
             _ => return None,
         };
 
-        #[rustfmt::skip]
         let specified_parents = match node.kind() {
             "flow_sequence" => self.get_specified_parents(&node).unwrap_or_default(),
-            "flow_node" => self.get_specified_parents(&node.parent()?).unwrap_or_default(),
+            "flow_node" => self
+                .get_specified_parents(&node.parent()?)
+                .unwrap_or_default(),
             "block_mapping_pair" => vec![],
             _ => return None,
         };
 
-        let lock = tokio::task::block_in_place(|| self.context.prototypes.blocking_read());
+        let lock = self.context.prototypes.read().await;
         let filtered_prototypes = lock
             .par_iter()
             .filter(|p| p.prototype == proto_name)
@@ -978,14 +989,16 @@ impl YamlCompletion {
         }))
     }
 
-    fn component_fields_completion(&self, node: Node) -> CompletionResult {
+    async fn component_fields_completion<'a>(&self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping");
 
         let comp_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.context.classes.clone());
-        let comp = block(|| reflection.get_component_by_name(comp_name))?;
-        let fields = block(|| reflection.get_fields(Arc::clone(&comp)))
+        let comp = reflection.get_component_by_name(comp_name).await?;
+        let fields = reflection
+            .get_fields(Arc::clone(&comp))
+            .await
             .into_par_iter()
             .filter(|f| {
                 f.attributes.contains("DataField") || f.attributes.contains("IncludeDataField")
@@ -1022,14 +1035,16 @@ impl YamlCompletion {
         }
     }
 
-    fn prototype_fields_completion(&self, node: Node) -> CompletionResult {
+    async fn prototype_fields_completion<'a>(&self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping");
 
         let proto_name = self.get_object_name(&node)?;
         let specified_fields = self.get_specified_fields(&node);
         let reflection = ReflectionManager::new(self.context.classes.clone());
-        let proto = block(|| reflection.get_prototype_by_name(proto_name))?;
-        let fields = block(|| reflection.get_fields(Arc::clone(&proto)))
+        let proto = reflection.get_prototype_by_name(proto_name).await?;
+        let fields = reflection
+            .get_fields(Arc::clone(&proto))
+            .await
             .into_par_iter()
             .filter(|f| f.attributes.contains("DataField"))
             .chain([CsharpClassField::new_empty("id", "string")])
@@ -1071,14 +1086,18 @@ impl YamlCompletion {
         }
     }
 
-    fn prototype_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+    async fn prototype_completion<'a>(
+        &'a self,
+        node: Node<'a>,
+        key_node: Node<'a>,
+    ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let value_node = node
             .child_by_field_name("value")
             .map(|v| v.utf8_text(self.src.as_bytes()).unwrap());
 
-        let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
+        let lock = self.context.classes.read().await;
         let completions = lock
             .par_iter()
             .filter_map(|c| Prototype::try_from(Arc::clone(c)).ok())
@@ -1128,7 +1147,11 @@ impl YamlCompletion {
         Some(CompletionResponse::Array(completions))
     }
 
-    fn components_completion(&self, node: Node, key_node: Node) -> CompletionResult {
+    async fn components_completion<'a>(
+        &'a self,
+        node: Node<'a>,
+        key_node: Node<'a>,
+    ) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_mapping_pair");
 
         let is_components_node = {
@@ -1151,7 +1174,7 @@ impl YamlCompletion {
 
         let value = node.child_by_field_name("value");
 
-        let lock = tokio::task::block_in_place(|| self.context.classes.blocking_read());
+        let lock = self.context.classes.read().await;
         let completions = lock
             .par_iter()
             .filter_map(|c| Component::try_from(Arc::clone(c)).ok());

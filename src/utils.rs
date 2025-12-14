@@ -90,11 +90,6 @@ impl ProgressStatus {
         instance
     }
 
-    #[instrument(skip(self))]
-    pub async fn increment(&mut self) {
-        self.next_state(self.percentage + 1, None).await;
-    }
-
     #[instrument(skip(self), fields(id = %self.id, percentage = self.percentage))]
     pub async fn next_state(&mut self, next_percentage: u32, next_message: Option<String>) {
         self.percentage = next_percentage;

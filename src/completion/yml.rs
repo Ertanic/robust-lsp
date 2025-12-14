@@ -265,7 +265,7 @@ impl YamlCompletion {
                             end: position,
                         }
                     },
-                    new_text: format!("type:"),
+                    new_text: "type:".to_string(),
                 })),
                 ..Default::default()
             }]))
@@ -416,11 +416,7 @@ impl YamlCompletion {
 
                 states.into_iter().map(|(_, s)| s).collect::<Vec<_>>()
             }
-            None => {
-                let states = meta.states.into_iter().map(|s| map(s.name)).collect::<Vec<_>>();
-
-                states
-            }
+            None => meta.states.into_iter().map(|s| map(s.name)).collect::<Vec<_>>(),
         };
 
         if states.is_empty() {
@@ -449,7 +445,7 @@ impl YamlCompletion {
                         return None;
                     }
 
-                    let last = value.split('/').filter(|s| !s.is_empty()).last()?;
+                    let last = value.split('/').filter(|s| !s.is_empty()).next_back()?;
                     if last.ends_with(".rsi") {
                         tracing::trace!("{last} ends with .rsi");
                         return None;
@@ -694,15 +690,12 @@ impl YamlCompletion {
                     label: key.clone(),
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some("locale".to_owned()),
-                    text_edit: if let Some(range) = range {
-                        Some(CompletionTextEdit::Edit(TextEdit {
+                    text_edit: range.map(|range| {
+                        CompletionTextEdit::Edit(TextEdit {
                             new_text: key.clone(),
                             range,
-                        }))
-                    }
-                    else {
-                        None
-                    },
+                        })
+                    }),
                     ..Default::default()
                 };
 
@@ -1068,7 +1061,7 @@ impl YamlCompletion {
             })
             .collect::<Vec<_>>();
 
-        if fields.len() > 0 {
+        if !fields.is_empty() {
             Some(CompletionResponse::Array(fields))
         }
         else {
@@ -1118,7 +1111,7 @@ impl YamlCompletion {
             })
             .collect::<Vec<_>>();
 
-        if fields.len() > 0 {
+        if !fields.is_empty() {
             Some(CompletionResponse::Array(fields))
         }
         else {

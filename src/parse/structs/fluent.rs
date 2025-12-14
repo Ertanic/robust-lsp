@@ -47,7 +47,7 @@ impl Ord for FluentKey {
 
 impl PartialOrd for FluentKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.key.partial_cmp(&other.key)
+        Some(self.cmp(other))
     }
 }
 

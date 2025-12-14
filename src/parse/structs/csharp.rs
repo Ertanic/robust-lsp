@@ -21,8 +21,7 @@ impl ReflectionManager {
         let bases = class
             .base
             .iter()
-            .map(|b| lock.par_iter().find_any(|c| c.name == *b))
-            .filter_map(|c| c)
+            .filter_map(|b| lock.par_iter().find_any(|c| c.name == *b))
             .chain([&class])
             .collect::<Vec<_>>();
 

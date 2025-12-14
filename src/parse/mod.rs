@@ -11,7 +11,7 @@ use std::{
 use structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype};
 use tokio::sync::Mutex;
 use tower_lsp::Client;
-use tracing::{info, instrument};
+use tracing::instrument;
 use walkdir::{DirEntry, WalkDir};
 
 pub mod common;
@@ -158,14 +158,11 @@ impl ParserHandler {
     pub async fn increment(&mut self) {
         self.actual_count += 1;
 
-        if self.finished {
-            return;
-        }
-        else if self.actual_count == self.total_count {
+        if self.actual_count == self.total_count {
             self.finished = true;
             self.status.lock().await.finish(None).await;
         }
-        else {
+        else if !self.finished {
             let percent = percentage(self.actual_count, self.total_count);
 
             if self.actual_count.is_multiple_of(100) {
@@ -179,10 +176,7 @@ impl ParserHandler {
     }
 
     pub async fn finish(&mut self) {
-        if self.finished {
-            return;
-        }
-        else {
+        if !self.finished {
             self.finished = true;
             self.status.lock().await.finish(None).await;
         }

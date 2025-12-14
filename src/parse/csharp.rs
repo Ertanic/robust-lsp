@@ -70,7 +70,7 @@ pub async fn parse(path: &Path, parsed_files: ParsedFiles, cache: Arc<RwLock<Pro
             if node.kind() == "class_declaration" || node.kind() == "interface_declaration" {
                 let src = Arc::clone(&src);
 
-                if let Ok(result) = CsharpObject::get(node, src, &path) {
+                if let Ok(result) = CsharpObject::get(node, src, path) {
                     objects.push(result);
                 }
             }

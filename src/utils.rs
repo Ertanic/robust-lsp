@@ -149,7 +149,7 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
     // If the string is empty, we use the cursor coordinates
     // and minus them by one, otherwise the root node `stream` will be searched.
     let trim_str = line.trim();
-    if trim_str.len() == 0 {
+    if trim_str.is_empty() {
         let col = if position.character == 0 {
             position.character
         }
@@ -181,7 +181,7 @@ pub fn get_columns(position: Position, src: &str) -> (usize, usize) {
         let mut ecol = scol;
         let mut chars = {
             let mut c = line.chars();
-            while let Some(_) = c.next_back() {
+            while c.next_back().is_some() {
                 scol -= 1;
 
                 if scol == position.character as usize {
@@ -268,7 +268,7 @@ pub fn span_to_range(src: &str, span: &fluent_syntax::ast::Span) -> tree_sitter:
     }
 }
 
-pub fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
+pub fn get_point(lines: &[usize], index: usize) -> tree_sitter::Point {
     let mut line_range = 0..lines.len();
     while line_range.end - line_range.start > 1 {
         let range_middle = line_range.start + (line_range.end - line_range.start) / 2;

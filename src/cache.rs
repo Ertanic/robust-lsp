@@ -84,15 +84,15 @@ impl ProjectCache {
 
     pub fn get(&'_ self, key: &CacheKey, context: CacheContext) -> CacheContent<'_> {
         match context {
-            CacheContext::Csharp => match self.cache.csharp.get(&key) {
+            CacheContext::Csharp => match self.cache.csharp.get(key) {
                 Some(content) => CacheContent::Csharp(content),
                 None => CacheContent::None,
             },
-            CacheContext::Fluent => match self.cache.fluent.get(&key) {
+            CacheContext::Fluent => match self.cache.fluent.get(key) {
                 Some(content) => CacheContent::Fluent(content),
                 None => CacheContent::None,
             },
-            CacheContext::Yaml => match self.cache.yaml.get(&key) {
+            CacheContext::Yaml => match self.cache.yaml.get(key) {
                 Some(content) => CacheContent::Yaml(content),
                 None => CacheContent::None,
             },
@@ -137,7 +137,7 @@ async fn decode_cache(filepath: impl AsRef<Path>) -> Cache {
     match result {
         Ok(content) => {
             info!("attempt to decode cache...");
-            let cache = bincode::decode_from_slice::<Cache, Configuration>(&content.as_bytes(), Configuration::default());
+            let cache = bincode::decode_from_slice::<Cache, Configuration>(content.as_bytes(), Configuration::default());
             match cache {
                 Ok((cache, _)) => {
                     info!("cache has been decoded");

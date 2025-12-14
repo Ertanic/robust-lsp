@@ -4,17 +4,14 @@ use crate::{
     goto::{yml::YamlGotoDefinition, GotoDefinition},
     hint::{yaml::YamlInlayHint, InlayHint},
     parse::{
-        common::Index,
-        csharp,
         structs::{csharp::CsharpObject, fluent::FluentKey, yaml::YamlPrototype},
-        yaml, ParseResult, ProjectParser,
+        ProjectParser,
     },
     references::{csharp::CsharpReferencesProvider, ReferencesProvider},
     semantic::fluent::{to_relative_semantic_tokens, SemanticAnalyzer},
     utils::{analyze_code, cache_file, check_project_compliance, get_ext, get_text_change, save_into_cache, update_tree},
 };
 use fluent_syntax::ast::Entry;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
 use std::{
     collections::{HashMap, HashSet},
@@ -36,7 +33,7 @@ use tower_lsp::{
     Client, LanguageServer,
 };
 use tracing::instrument;
-use tree_sitter::{Parser, Tree};
+use tree_sitter::Tree;
 
 pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
 pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;

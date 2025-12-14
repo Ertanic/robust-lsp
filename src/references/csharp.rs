@@ -47,10 +47,7 @@ impl CsharpReferencesProvider {
 
     fn try_get_references_for_class_name(&self, node: Node) -> GetReferencesResult {
         let parent_node = node.parent();
-        let Some(parent_node) = parent_node
-        else {
-            return None;
-        };
+        let parent_node = parent_node?;
 
         if node.kind() != "identifier" || parent_node.kind() != "class_declaration" {
             return None;

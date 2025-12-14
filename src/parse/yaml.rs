@@ -7,7 +7,7 @@ use crate::{
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tree_sitter::{Node, Range};
 
 pub async fn parse(
@@ -36,7 +36,7 @@ pub async fn parse(
     let old_tree = lock.get(&path);
 
     let tree = if let Some(old_tree) = old_tree {
-        parser.parse(src.deref(), Some(old_tree.deref()))
+        parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
     } else {
         parser.parse(src.deref(), None)
     };
@@ -44,12 +44,13 @@ pub async fn parse(
     drop(lock);
 
     if let Some(tree) = tree {
-        let tree = Arc::new(tree);
+        let tree = Arc::new(Mutex::new(tree));
         parsed_files
             .write()
             .await
             .insert(path.clone(), Arc::clone(&tree));
 
+        let tree = tree.lock().await;
         let root_node = tree.root_node();
         if let Some(block_sequence_node) = get_block_sequence_node(&root_node) {
             if block_sequence_node.kind() != "block_sequence" {
@@ -64,10 +65,7 @@ pub async fn parse(
                 }
             }
 
-            cache
-                .write()
-                .await
-                .insert(key, CacheContent::Yaml(&protos));
+            cache.write().await.insert(key, CacheContent::Yaml(&protos));
 
             return ParseResult::YamlPrototypes(protos);
         }

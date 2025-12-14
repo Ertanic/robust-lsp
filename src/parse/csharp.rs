@@ -59,7 +59,7 @@ pub async fn parse(
     let old_tree = lock.get(&path);
 
     let tree = if let Some(old_tree) = old_tree {
-        parser.parse(src.deref(), Some(old_tree.deref()))
+        parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
     } else {
         parser.parse(src.deref(), None)
     };
@@ -67,12 +67,13 @@ pub async fn parse(
     drop(lock);
     
     if let Some(tree) = tree {
-        let tree = Arc::new(tree);
+        let tree = Arc::new(Mutex::new(tree));
         parsed_files
             .write()
             .await
             .insert(path.clone(), Arc::clone(&tree));
 
+        let tree = tree.lock().await;
         let root_node = tree.root_node();
         let mut stack = vec![root_node];
 

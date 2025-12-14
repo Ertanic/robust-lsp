@@ -4,13 +4,15 @@ use std::{future::Future, path::Path, sync::Arc};
 use tokio::io::{AsyncReadExt, BufReader};
 use tower_lsp::{
     lsp_types::{
-        notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString,
-        Position, ProgressParams, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin,
-        WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
+        self, notification::Progress, request::WorkDoneProgressCreate, InitializeParams,
+        NumberOrString, Position, ProgressParams, ProgressParamsValue, WorkDoneProgress,
+        WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+        WorkDoneProgressReport,
     },
     Client,
 };
 use tracing::{error, instrument};
+use tree_sitter::{InputEdit, Point};
 
 pub fn check_project_compliance(params: &InitializeParams) -> bool {
     if let Some(root_uri) = params.root_uri.as_ref() {
@@ -296,4 +298,47 @@ pub fn get_point(lines: &Vec<usize>, index: usize) -> tree_sitter::Point {
         row: line - 1,
         column: col - 1,
     }
+}
+
+pub fn get_text_change(
+    rope: &ropey::Rope,
+    range: &lsp_types::Range,
+    new_text: &str,
+) -> Option<InputEdit> {
+    let start_char = rope.line_to_char(range.start.line as usize) + range.start.character as usize;
+    let old_end_char = rope.line_to_char(range.end.line as usize) + range.end.character as usize;
+
+    let start_byte = rope.try_char_to_byte(start_char).ok()?;
+    let old_end_byte = rope.try_char_to_byte(old_end_char).ok()?;
+
+    let new_end_byte = start_byte + new_text.len();
+
+    Some(InputEdit {
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+
+        start_position: Point {
+            row: range.start.line as usize,
+            column: range.start.character as usize,
+        },
+        old_end_position: Point {
+            row: range.end.line as usize,
+            column: range.end.character as usize,
+        },
+        new_end_position: {
+            let lines = new_text.lines().count();
+            if lines == 1 {
+                Point {
+                    row: range.start.line as usize,
+                    column: range.start.character as usize + new_text.chars().count(),
+                }
+            } else {
+                Point {
+                    row: range.start.line as usize + lines - 1,
+                    column: new_text.lines().last().unwrap_or_default().chars().count(),
+                }
+            }
+        },
+    })
 }

@@ -6,7 +6,7 @@ use crate::{
 use ropey::Rope;
 use std::sync::Arc;
 use stringcase::camel_case;
-use tokio::task::block_in_place;
+use tokio::{sync::Mutex, task::block_in_place};
 use tower_lsp::{
     lsp_types,
     lsp_types::{Location, Position, Url},
@@ -17,17 +17,19 @@ pub struct CsharpReferencesProvider {
     context: Arc<Context>,
     position: Position,
     src: String,
-    tree: Arc<Tree>,
+    tree: Arc<Mutex<Tree>>,
 }
 
+#[async_trait::async_trait]
 impl ReferencesProvider for CsharpReferencesProvider {
-    fn get_references(&self) -> GetReferencesResult {
+    async fn get_references(&self) -> GetReferencesResult {
         let point = Point::new(
             self.position.line as usize,
             self.position.character as usize,
         );
 
-        let root_node = self.tree.root_node();
+        let tree = self.tree.lock().await;
+        let root_node = tree.root_node();
         let found_node = root_node.named_descendant_for_point_range(point, point)?;
 
         self.try_get_references_for_class_name(found_node)
@@ -35,7 +37,7 @@ impl ReferencesProvider for CsharpReferencesProvider {
 }
 
 impl CsharpReferencesProvider {
-    pub fn new(context: Arc<Context>, position: Position, rope: &Rope, tree: Arc<Tree>) -> Self {
+    pub fn new(context: Arc<Context>, position: Position, rope: &Rope, tree: Arc<Mutex<Tree>>) -> Self {
         let src = rope.to_string();
 
         Self {

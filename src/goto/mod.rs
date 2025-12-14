@@ -2,6 +2,7 @@ pub mod yml;
 
 pub type GotoDefinitionResult = Option<tower_lsp::lsp_types::GotoDefinitionResponse>;
 
+#[async_trait::async_trait]
 pub trait GotoDefinition {
-    fn goto_definition(&self) -> GotoDefinitionResult;
+    async fn goto_definition(&self) -> GotoDefinitionResult;
 }

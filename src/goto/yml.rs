@@ -14,7 +14,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ropey::Rope;
 use std::{path::PathBuf, sync::Arc};
 use stringcase::camel_case;
-use tokio::task::block_in_place;
+use tokio::{sync::Mutex, task::block_in_place};
 use tower_lsp::lsp_types::{self, GotoDefinitionResponse, Location, LocationLink, Position, Url};
 use tree_sitter::{Node, Point, Tree};
 
@@ -22,18 +22,20 @@ pub struct YamlGotoDefinition {
     context: Arc<Context>,
     position: Position,
     src: String,
-    tree: Arc<Tree>,
+    tree: Arc<Mutex<Tree>>,
     project_root: PathBuf,
 }
 
+#[async_trait::async_trait]
 impl GotoDefinition for YamlGotoDefinition {
-    fn goto_definition(&self) -> GotoDefinitionResult {
+    async fn goto_definition(&self) -> GotoDefinitionResult {
         let point = Point::new(
             self.position.line as usize,
             self.position.character as usize,
         );
 
-        let root_node = self.tree.root_node();
+        let tree = self.tree.lock().await;
+        let root_node = tree.root_node();
         let found_node = root_node.named_descendant_for_point_range(point, point)?;
 
         let nest = self.get_nesting(&found_node);
@@ -56,7 +58,7 @@ impl YamlGotoDefinition {
         context: Arc<Context>,
         position: Position,
         rope: &Rope,
-        tree: Arc<Tree>,
+        tree: Arc<Mutex<Tree>>,
         project_root: PathBuf,
     ) -> Self {
         let src = rope.to_string();

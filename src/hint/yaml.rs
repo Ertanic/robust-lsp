@@ -1,6 +1,7 @@
 use super::InlayHint;
 use crate::{backend::CsharpObjects, parse::structs::csharp::ReflectionManager, utils::block};
 use ropey::Rope;
+use tokio::sync::Mutex;
 use std::sync::Arc;
 use stringcase::camel_case;
 use tower_lsp::lsp_types::{InlayHintKind, InlayHintLabel, Position, Range};
@@ -18,12 +19,14 @@ pub struct YamlInlayHint {
     classes: CsharpObjects,
     range: Range,
     src: String,
-    tree: Arc<Tree>,
+    tree: Arc<Mutex<Tree>>,
 }
 
+#[async_trait::async_trait]
 impl InlayHint for YamlInlayHint {
-    fn inlay_hint(&self) -> YamlInlayHintResult {
-        let root_node = self.tree.root_node();
+    async fn inlay_hint(&self) -> YamlInlayHintResult {
+        let tree = self.tree.lock().await;
+        let root_node = tree.root_node();
         let document = find_child_node(root_node, "document")?;
         let block_node = find_child_node(document, "block_node")?;
         let block_sequence = find_child_node(block_node, "block_sequence")?;
@@ -58,7 +61,7 @@ impl InlayHint for YamlInlayHint {
 }
 
 impl YamlInlayHint {
-    pub fn new(classes: CsharpObjects, range: Range, rope: &Rope, tree: Arc<Tree>) -> Self {
+    pub fn new(classes: CsharpObjects, range: Range, rope: &Rope, tree: Arc<Mutex<Tree>>) -> Self {
         let src = rope.to_string();
 
         Self {

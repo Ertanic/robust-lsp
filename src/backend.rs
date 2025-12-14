@@ -1,5 +1,6 @@
 use crate::cache::ProjectCache;
 use crate::semantic::fluent::to_relative_semantic_tokens;
+use crate::utils::get_text_change;
 use crate::{
     completion::{yml::YamlCompletion, Completion},
     goto::{yml::YamlGotoDefinition, GotoDefinition},
@@ -44,12 +45,12 @@ use tower_lsp::{
     Client, LanguageServer,
 };
 use tracing::instrument;
-use tree_sitter::{Parser, Tree};
+use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
 pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;
 pub type YamlPrototypes = Arc<RwLock<HashSet<Arc<YamlPrototype>>>>;
-pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Tree>>>>;
+pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Mutex<Tree>>>>>;
 
 #[derive(Default)]
 pub struct Context {
@@ -62,7 +63,7 @@ pub struct Context {
 
 struct OpenedFile {
     pub rope: Arc<RwLock<Rope>>,
-    pub tree: Arc<Tree>,
+    pub tree: Arc<Mutex<Tree>>,
 }
 
 pub(crate) struct Backend {
@@ -204,6 +205,8 @@ impl LanguageServer for Backend {
 
                 for change in params.content_changes {
                     if let Some(range) = change.range {
+                        let edit = get_text_change(&rope_guard, &range, &change.text);
+
                         let start_idx = rope_guard.line_to_char(range.start.line as usize)
                             + range.start.character as usize;
                         let end_idx = rope_guard.line_to_char(range.end.line as usize)
@@ -214,6 +217,10 @@ impl LanguageServer for Backend {
                         };
                         if let Err(err) = rope_guard.try_insert(start_idx, &change.text) {
                             tracing::warn!("Failed to insert text into document: {}.", err);
+                        }
+
+                        if let Some(edit) = edit {
+                            tree.lock().await.edit(&edit);
                         }
 
                         tracing::trace!("Document has been changed.");
@@ -228,10 +235,10 @@ impl LanguageServer for Backend {
                             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
                             .unwrap();
 
-                        let new_tree = parser.parse(rope_guard.to_string(), None);
+                        let new_tree = parser.parse(rope_guard.to_string(), Some(&*tree.lock().await));
 
                         if let Some(new_tree) = new_tree {
-                            let tree = Arc::new(new_tree);
+                            let tree = Arc::new(Mutex::new(new_tree));
                             let rope = Arc::clone(rope);
                             let opened_file = OpenedFile {
                                 rope,
@@ -252,10 +259,10 @@ impl LanguageServer for Backend {
                     "yaml" | "yml" => {
                         parser.set_language(&tree_sitter_yaml::language()).unwrap();
 
-                        let new_tree = parser.parse(rope_guard.to_string(), None);
+                        let new_tree = parser.parse(rope_guard.to_string(), Some(&*tree.lock().await));
 
                         if let Some(new_tree) = new_tree {
-                            let tree = Arc::new(new_tree);
+                            let tree = Arc::new(Mutex::new(new_tree));
                             let rope = Arc::clone(rope);
                             let opened_file = OpenedFile {
                                 rope,
@@ -406,7 +413,7 @@ impl LanguageServer for Backend {
                         Arc::clone(tree),
                         root,
                     );
-                    Ok(definition.goto_definition())
+                    Ok(definition.goto_definition().await)
                 } else {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)
@@ -437,7 +444,7 @@ impl LanguageServer for Backend {
                         rope.read().await.deref(),
                         Arc::clone(tree),
                     );
-                    Ok(provider.get_references())
+                    Ok(provider.get_references().await)
                 } else {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)
@@ -466,7 +473,7 @@ impl LanguageServer for Backend {
                         rope.read().await.deref(),
                         Arc::clone(tree),
                     );
-                    Ok(hint.inlay_hint())
+                    Ok(hint.inlay_hint().await)
                 } else {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)

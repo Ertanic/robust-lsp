@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use ropey::Rope;
 use std::{fs, path::PathBuf, sync::Arc};
 use stringcase::camel_case;
+use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{
     self, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
     CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
@@ -24,7 +25,7 @@ pub struct YamlCompletion {
     context: Arc<Context>,
     position: Position,
     src: String,
-    tree: Arc<Tree>,
+    tree: Arc<Mutex<Tree>>,
     root_path: PathBuf,
 }
 
@@ -35,7 +36,8 @@ impl Completion for YamlCompletion {
         let start_point = Point::new(self.position.line as usize, start_col);
         let end_point = Point::new(self.position.line as usize, end_col);
 
-        let root_node = self.tree.root_node();
+        let tree = self.tree.lock().await;
+        let root_node = tree.root_node();
         let found_node = root_node.named_descendant_for_point_range(start_point, end_point)?;
 
         // If a text node was found, we climb to the parent node,
@@ -82,7 +84,7 @@ impl YamlCompletion {
         context: Arc<Context>,
         position: Position,
         src: &Rope,
-        tree: Arc<Tree>,
+        tree: Arc<Mutex<Tree>>,
         root_path: PathBuf,
     ) -> Self {
         let src = src.to_string();

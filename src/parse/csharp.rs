@@ -14,11 +14,10 @@ use crate::{
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 use tokio::sync::{Mutex, RwLock};
-use tracing::info;
 use tree_sitter::Node;
 
 static PROTOTYPE_ATTR_ARGS: &[&str] = &["type", "loadPriority"];
@@ -27,7 +26,7 @@ static ID_DATA_FIELD_ATTR_ARGS: &[&str] = &["priority", "customTypeSerializer"];
 
 type Result<T, E = ()> = std::result::Result<T, E>;
 
-pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
+pub async fn parse(path: &Path, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -46,7 +45,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
     let src = Arc::new(content);
 
     let lock = parsed_files.read().await;
-    let old_tree = lock.get(&path);
+    let old_tree = lock.get(path);
 
     let tree = if let Some(old_tree) = old_tree {
         parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
@@ -59,7 +58,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
 
     if let Some(tree) = tree {
         let tree = Arc::new(Mutex::new(tree));
-        parsed_files.write().await.insert(path.clone(), Arc::clone(&tree));
+        parsed_files.write().await.insert(path.to_path_buf(), Arc::clone(&tree));
 
         let tree = tree.lock().await;
         let root_node = tree.root_node();

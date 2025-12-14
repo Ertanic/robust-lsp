@@ -11,7 +11,7 @@ use crate::{
     },
     references::{csharp::CsharpReferencesProvider, ReferencesProvider},
     semantic::fluent::{to_relative_semantic_tokens, SemanticAnalyzer},
-    utils::{check_project_compliance, get_ext, get_text_change},
+    utils::{cache_file, check_project_compliance, get_ext, get_text_change},
 };
 use fluent_syntax::ast::Entry;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -36,12 +36,13 @@ use tower_lsp::{
     Client, LanguageServer,
 };
 use tracing::instrument;
-use tree_sitter::{InputEdit, Parser, Point, Tree};
+use tree_sitter::{Parser, Tree};
 
 pub type FluentLocales = Arc<RwLock<HashSet<Arc<FluentKey>>>>;
 pub type CsharpObjects = Arc<RwLock<HashSet<Arc<CsharpObject>>>>;
 pub type YamlPrototypes = Arc<RwLock<HashSet<Arc<YamlPrototype>>>>;
 pub type ParsedFiles = Arc<RwLock<HashMap<PathBuf, Arc<Mutex<Tree>>>>>;
+pub type OpenedFiles = Arc<RwLock<HashMap<Url, OpenedFile>>>;
 
 #[derive(Default)]
 pub struct Context {
@@ -52,14 +53,15 @@ pub struct Context {
     pub locales: FluentLocales,
 }
 
-struct OpenedFile {
+#[derive(Clone)]
+pub struct OpenedFile {
     pub rope: Arc<RwLock<Rope>>,
     pub tree: Arc<Mutex<Tree>>,
 }
 
 pub(crate) struct Backend {
     client: Arc<Client>,
-    opened_files: RwLock<HashMap<Url, OpenedFile>>,
+    opened_files: OpenedFiles,
     context: Arc<Context>,
     root_uri: Arc<Mutex<Option<Url>>>,
 }
@@ -144,21 +146,13 @@ impl LanguageServer for Backend {
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let path = params.text_document.uri.to_file_path().unwrap_or_default();
-
-        let tree = self.context.parsed_files.read().await.get(&path).map(Arc::clone);
-
-        if let Some(tree) = tree {
-            let content = std::fs::read_to_string(path).unwrap_or_default();
-            let rope = Arc::new(RwLock::new(Rope::from(content)));
-            let opened_file = OpenedFile { rope, tree };
-
-            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
-
-            tracing::trace!("Document has been cached.");
-        } else {
-            tracing::trace!("File can't be cached.");
-        }
+        cache_file(
+            params.text_document.uri,
+            self.context.clone(),
+            Some(params.text_document.text),
+            self.opened_files.clone(),
+        )
+        .await;
     }
 
     #[instrument(skip_all, fields(uri = %params.text_document.uri))]
@@ -252,7 +246,7 @@ impl LanguageServer for Backend {
 
         match ext {
             "cs" => {
-                let result = csharp::parse(path.clone(), self.context.parsed_files.clone(), self.context.cache.clone()).await;
+                let result = csharp::parse(&path, self.context.parsed_files.clone(), self.context.cache.clone()).await;
                 match result {
                     ParseResult::Csharp(parsed_classes) => {
                         let mut lock = self.context.classes.write().await;
@@ -277,7 +271,7 @@ impl LanguageServer for Backend {
                 }
             }
             "yml" | "yaml" => {
-                let result = yaml::parse(path.clone(), self.context.parsed_files.clone(), self.context.cache.clone()).await;
+                let result = yaml::parse(&path, self.context.parsed_files.clone(), self.context.cache.clone()).await;
                 match result {
                     ParseResult::YamlPrototypes(parsed_prototypes) => {
                         let mut lock = self.context.prototypes.write().await;
@@ -303,6 +297,8 @@ impl LanguageServer for Backend {
             }
             _ => {}
         }
+
+        self.context.cache.write().await.write().await;
     }
 
     #[rustfmt::skip]
@@ -315,14 +311,22 @@ impl LanguageServer for Backend {
         match extension {
             "yml" | "yaml" => {
                 let opened = self.opened_files.read().await;
-                let opened_file = opened.get(&params.text_document_position.text_document.uri);
+                let mut opened_file = opened.get(&params.text_document_position.text_document.uri).cloned();
+
+                if opened_file.is_none() {
+                    tracing::trace!("File wasn't cached. Trying to cache it...");
+                    drop(opened);
+                    cache_file(params.text_document_position.text_document.uri.clone(), self.context.clone(), None, self.opened_files.clone()).await;
+                    let opened = self.opened_files.read().await;
+                    opened_file = opened.get(&params.text_document_position.text_document.uri).cloned();
+                }
 
                 if let Some(OpenedFile { rope, tree }) = opened_file {
                     let completion = YamlCompletion::new(
                             self.context.clone(),
                             params.text_document_position.position,
                             rope.read().await.deref(),
-                            Arc::clone(tree),
+                            Arc::clone(&tree),
                             root_path
                         );
                         Ok(completion.completion().await)
@@ -387,7 +391,8 @@ impl LanguageServer for Backend {
                         Arc::clone(tree),
                     );
                     Ok(provider.get_references().await)
-                } else {
+                }
+                else {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)
                 }
@@ -408,7 +413,8 @@ impl LanguageServer for Backend {
                 if let Some(OpenedFile { rope, tree }) = opened_file {
                     let hint = YamlInlayHint::new(self.context.classes.clone(), params.range, rope.read().await.deref(), Arc::clone(tree));
                     Ok(hint.inlay_hint().await)
-                } else {
+                }
+                else {
                     tracing::trace!("File wasn't cached.");
                     Ok(None)
                 }

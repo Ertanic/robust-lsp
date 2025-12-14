@@ -5,10 +5,10 @@ use crate::{
     utils::{read_file, span_to_range, FileContent},
 };
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, PatternElement};
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 use tokio::sync::RwLock;
 
-pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
+pub async fn parse(path: &Path, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
     let FileContent { hash, content } = match read_file(&path).await {
         Some(content) => content,
         None => return ParseResult::None,
@@ -54,7 +54,7 @@ pub async fn parse(path: PathBuf, cache: Arc<RwLock<ProjectCache>>) -> ParseResu
                 .collect::<HashSet<String>>();
 
             let range = span_to_range(&content, &msg.id.span);
-            let index = DefinitionIndex(path.clone(), Some(range.into()));
+            let index = DefinitionIndex(path.to_path_buf(), Some(range.into()));
 
             FluentKey::new(msg.id.name.to_string(), args, index)
         })

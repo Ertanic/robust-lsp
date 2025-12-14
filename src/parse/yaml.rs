@@ -4,11 +4,11 @@ use crate::{
     parse::ParseResult,
     utils::{read_file, FileContent},
 };
-use std::{ops::Deref, path::PathBuf, sync::Arc};
+use std::{ops::Deref, path::Path, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tree_sitter::{Node, Range};
 
-pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
+pub async fn parse(path: &Path, parsed_files: ParsedFiles, cache: Arc<RwLock<ProjectCache>>) -> ParseResult {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&tree_sitter_yaml::language()).expect("Failed to load YAML grammar");
 
@@ -25,7 +25,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
     let src = Arc::new(content);
 
     let lock = parsed_files.read().await;
-    let old_tree = lock.get(&path);
+    let old_tree = lock.get(path);
 
     let tree = if let Some(old_tree) = old_tree {
         parser.parse(src.deref(), Some(old_tree.lock().await.deref()))
@@ -38,7 +38,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
 
     if let Some(tree) = tree {
         let tree = Arc::new(Mutex::new(tree));
-        parsed_files.write().await.insert(path.clone(), Arc::clone(&tree));
+        parsed_files.write().await.insert(path.to_path_buf(), Arc::clone(&tree));
 
         let tree = tree.lock().await;
         let root_node = tree.root_node();
@@ -50,7 +50,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
             let mut protos = vec![];
             for i in 0..block_sequence_node.named_child_count() {
                 let block_sequence_item_node = block_sequence_node.named_child(i).unwrap();
-                if let Some(prototype) = get_yaml_prototype(block_sequence_item_node, &src, &path) {
+                if let Some(prototype) = get_yaml_prototype(block_sequence_item_node, &src, path) {
                     protos.push(prototype);
                 }
             }
@@ -64,7 +64,7 @@ pub async fn parse(path: PathBuf, parsed_files: ParsedFiles, cache: Arc<RwLock<P
     ParseResult::None
 }
 
-fn get_yaml_prototype(block_sequence_item_node: Node, src: &str, path: &PathBuf) -> Option<YamlPrototype> {
+fn get_yaml_prototype(block_sequence_item_node: Node, src: &str, path: &Path) -> Option<YamlPrototype> {
     if let Some(block_mapping_node) = get_block_mapping(block_sequence_item_node) {
         let mut prototype = None;
         let mut id = None;
@@ -125,7 +125,7 @@ fn get_yaml_prototype(block_sequence_item_node: Node, src: &str, path: &PathBuf)
                 return Some(YamlPrototype::new(
                     prototype,
                     id,
-                    DefinitionIndex(path.clone(), id_range.map(Range::into)),
+                    DefinitionIndex(path.to_path_buf(), id_range.map(Range::into)),
                 ))
             }
             _ => return None,

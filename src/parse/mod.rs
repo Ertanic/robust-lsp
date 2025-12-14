@@ -74,9 +74,9 @@ impl<'a> ProjectParser<'a> {
 
             tokio::spawn(async move {
                 let result: ParseResult = match get_ext(&f) {
-                    "cs" => csharp::parse(f, parsed_files, cache).await,
-                    "yml" => yaml::parse(f, parsed_files, cache).await,
-                    "ftl" => fluent::parse(f, cache).await,
+                    "cs" => csharp::parse(&f, parsed_files, cache).await,
+                    "yml" => yaml::parse(&f, parsed_files, cache).await,
+                    "ftl" => fluent::parse(&f, cache).await,
                     _ => ParseResult::None,
                 };
 

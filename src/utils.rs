@@ -1,13 +1,22 @@
-use rayon::join;
+use crate::{
+    backend::{Context, OpenedFile, OpenedFiles},
+    parse::{ParseResult, common::Index},
+};
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    join,
+};
+use ropey::Rope;
 use sha2::{Digest, Sha256};
 use std::{future::Future, path::Path, sync::Arc};
-use tokio::io::{AsyncReadExt, BufReader};
+use tokio::{
+    io::{AsyncReadExt, BufReader},
+    sync::RwLock,
+};
 use tower_lsp::{
-    lsp_types::{
-        self, notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString, Position, ProgressParams,
-        ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
-    },
-    Client,
+    Client, lsp_types::{
+        self, InitializeParams, NumberOrString, Position, ProgressParams, ProgressParamsValue, Url, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport, notification::Progress, request::WorkDoneProgressCreate
+    }
 };
 use tracing::{error, instrument};
 use tree_sitter::{InputEdit, Point};
@@ -318,4 +327,28 @@ pub fn get_text_change(rope: &ropey::Rope, range: &lsp_types::Range, new_text: &
             }
         },
     })
+}
+
+pub async fn cache_file(url: Url, context: Arc<Context>, content: Option<String>, opened_files: OpenedFiles) {
+    let path = url.to_file_path().unwrap_or_default();
+    let tree = context.parsed_files.read().await.get(&path).map(Arc::clone);
+
+    if let Some(tree) = tree {
+        let content = if let Some(content) = content {
+            content
+        }
+        else {
+            std::fs::read_to_string(path).unwrap_or_default()
+        };
+
+        let rope = Arc::new(RwLock::new(Rope::from(content)));
+        let opened_file = OpenedFile { rope, tree };
+
+        opened_files.write().await.insert(url, opened_file);
+
+        tracing::trace!("Document has been cached.");
+    }
+    else {
+        tracing::trace!("File can't be cached.");
+    }
 }

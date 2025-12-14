@@ -11,7 +11,7 @@ use crate::{
     },
     references::{csharp::CsharpReferencesProvider, ReferencesProvider},
     semantic::fluent::{to_relative_semantic_tokens, SemanticAnalyzer},
-    utils::{cache_file, check_project_compliance, get_ext, get_text_change},
+    utils::{analyze_code, cache_file, check_project_compliance, get_ext, get_text_change, save_into_cache, update_tree},
 };
 use fluent_syntax::ast::Entry;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -160,145 +160,77 @@ impl LanguageServer for Backend {
         let opened_files_guard = self.opened_files.read().await;
         let found_rope = opened_files_guard.get(&params.text_document.uri);
 
-        match found_rope {
-            Some(OpenedFile { rope, tree }) => {
-                let mut rope_guard = rope.write().await;
+        if let Some(OpenedFile { rope, tree }) = found_rope {
+            let mut rope_guard = rope.write().await;
 
-                for change in params.content_changes {
-                    if let Some(range) = change.range {
-                        let edit = get_text_change(&rope_guard, &range, &change.text);
+            for change in params.content_changes {
+                if let Some(range) = change.range {
+                    let edit = get_text_change(&rope_guard, &range, &change.text);
 
-                        let start_idx = rope_guard.line_to_char(range.start.line as usize) + range.start.character as usize;
-                        let end_idx = rope_guard.line_to_char(range.end.line as usize) + range.end.character as usize;
+                    let start_idx = rope_guard.line_to_char(range.start.line as usize) + range.start.character as usize;
+                    let end_idx = rope_guard.line_to_char(range.end.line as usize) + range.end.character as usize;
 
-                        if let Err(err) = rope_guard.try_remove(start_idx..end_idx) {
-                            tracing::warn!("Failed to remove text from document: {}.", err);
-                        };
-                        if let Err(err) = rope_guard.try_insert(start_idx, &change.text) {
-                            tracing::warn!("Failed to insert text into document: {}.", err);
-                        }
-
-                        if let Some(edit) = edit {
-                            tree.lock().await.edit(&edit);
-                        }
-
-                        tracing::trace!("Document has been changed.");
+                    if let Err(err) = rope_guard.try_remove(start_idx..end_idx) {
+                        tracing::warn!("Failed to remove text from document: {}.", err);
+                    };
+                    if let Err(err) = rope_guard.try_insert(start_idx, &change.text) {
+                        tracing::warn!("Failed to insert text into document: {}.", err);
                     }
-                }
 
-                let mut parser = Parser::new();
-                let path = params.text_document.uri.to_file_path().unwrap_or_default();
-                match get_ext(&path) {
-                    "cs" => {
-                        parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into()).unwrap();
-
-                        let new_tree = parser.parse(rope_guard.to_string(), Some(&*tree.lock().await));
-
-                        if let Some(new_tree) = new_tree {
-                            let tree = Arc::new(Mutex::new(new_tree));
-                            let rope = Arc::clone(rope);
-                            let opened_file = OpenedFile {
-                                rope,
-                                tree: Arc::clone(&tree),
-                            };
-
-                            drop(rope_guard);
-                            drop(opened_files_guard);
-
-                            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
-
-                            self.context.parsed_files.write().await.insert(path, tree);
-                        }
+                    if let Some(edit) = edit {
+                        tree.lock().await.edit(&edit);
                     }
-                    "yaml" | "yml" => {
-                        parser.set_language(&tree_sitter_yaml::language()).unwrap();
 
-                        let new_tree = parser.parse(rope_guard.to_string(), Some(&*tree.lock().await));
-
-                        if let Some(new_tree) = new_tree {
-                            let tree = Arc::new(Mutex::new(new_tree));
-                            let rope = Arc::clone(rope);
-                            let opened_file = OpenedFile {
-                                rope,
-                                tree: Arc::clone(&tree),
-                            };
-
-                            drop(rope_guard);
-                            drop(opened_files_guard);
-
-                            self.opened_files.write().await.insert(params.text_document.uri, opened_file);
-
-                            self.context.parsed_files.write().await.insert(path, tree);
-                        }
-                    }
-                    _ => {}
+                    tracing::trace!("Document has been changed.");
                 }
             }
-            None => {
-                tracing::warn!("File wasn't cached.");
+
+            let content = rope_guard.to_string();
+            let path = params.text_document.uri.to_file_path().unwrap_or_default();
+            let tree = Arc::clone(tree);
+            let rope = Arc::clone(rope);
+
+            drop(rope_guard);
+            drop(opened_files_guard); // release the guard so that there is no deadlock
+
+            match get_ext(&path) {
+                "cs" => {
+                    let opened_file = update_tree(&tree_sitter_c_sharp::LANGUAGE.into(), &content, tree.clone(), rope.clone()).await;
+                    if let Some(opened_file) = opened_file {
+                        save_into_cache(
+                            params.text_document.uri,
+                            self.opened_files.clone(),
+                            self.context.parsed_files.clone(),
+                            tree.clone(),
+                            opened_file,
+                        )
+                        .await;
+                    }
+                }
+                "yaml" | "yml" => {
+                    let opened_file = update_tree(&tree_sitter_yaml::language(), &content, tree.clone(), rope.clone()).await;
+                    if let Some(opened_file) = opened_file {
+                        save_into_cache(
+                            params.text_document.uri,
+                            self.opened_files.clone(),
+                            self.context.parsed_files.clone(),
+                            tree.clone(),
+                            opened_file,
+                        )
+                        .await;
+                    }
+                }
+                _ => {}
             }
+        }
+        else {
+            tracing::warn!("File wasn't cached.");
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let path = params.text_document.uri.to_file_path().unwrap_or_default();
-        let ext = get_ext(&path);
-
-        match ext {
-            "cs" => {
-                let result = csharp::parse(&path, self.context.parsed_files.clone(), self.context.cache.clone()).await;
-                match result {
-                    ParseResult::Csharp(parsed_classes) => {
-                        let mut lock = self.context.classes.write().await;
-                        let diff = lock
-                            .par_iter()
-                            .filter(|c| c.index().0 == path && !parsed_classes.contains(c))
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        for class in parsed_classes {
-                            lock.insert(Arc::new(class));
-                        }
-
-                        for class in diff {
-                            lock.remove(&class);
-                        }
-                    }
-                    _ => {
-                        tracing::warn!("Failed to parse file: {}.", params.text_document.uri);
-                        return;
-                    }
-                }
-            }
-            "yml" | "yaml" => {
-                let result = yaml::parse(&path, self.context.parsed_files.clone(), self.context.cache.clone()).await;
-                match result {
-                    ParseResult::YamlPrototypes(parsed_prototypes) => {
-                        let mut lock = self.context.prototypes.write().await;
-                        let diff = lock
-                            .par_iter()
-                            .filter(|p| p.index().0 == path && !parsed_prototypes.contains(p))
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        for proto in parsed_prototypes {
-                            lock.insert(Arc::new(proto));
-                        }
-
-                        for proto in diff {
-                            lock.remove(&proto);
-                        }
-                    }
-                    _ => {
-                        tracing::warn!("Failed to parse file: {}.", params.text_document.uri);
-                        return;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        self.context.cache.write().await.write().await;
+        analyze_code(&path, self.context.clone()).await;
     }
 
     #[rustfmt::skip]

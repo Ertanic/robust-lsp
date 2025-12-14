@@ -1,6 +1,6 @@
 use crate::{
-    backend::{Context, OpenedFile, OpenedFiles},
-    parse::{ParseResult, common::Index},
+    backend::{Context, OpenedFile, OpenedFiles, ParsedFiles},
+    parse::{common::Index, ParseResult},
 };
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
@@ -11,12 +11,14 @@ use sha2::{Digest, Sha256};
 use std::{future::Future, path::Path, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, BufReader},
-    sync::RwLock,
+    sync::{Mutex, RwLock},
 };
 use tower_lsp::{
-    Client, lsp_types::{
-        self, InitializeParams, NumberOrString, Position, ProgressParams, ProgressParamsValue, Url, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport, notification::Progress, request::WorkDoneProgressCreate
-    }
+    lsp_types::{
+        self, notification::Progress, request::WorkDoneProgressCreate, InitializeParams, NumberOrString, Position, ProgressParams,
+        ProgressParamsValue, Url, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
+    },
+    Client,
 };
 use tracing::{error, instrument};
 use tree_sitter::{InputEdit, Point};
@@ -351,4 +353,98 @@ pub async fn cache_file(url: Url, context: Arc<Context>, content: Option<String>
     else {
         tracing::trace!("File can't be cached.");
     }
+}
+
+pub async fn analyze_code(path: &Path, context: Arc<Context>) {
+    let ext = get_ext(path);
+
+    match ext {
+        "cs" => {
+            let result = crate::parse::csharp::parse(path, context.parsed_files.clone(), context.cache.clone()).await;
+            match result {
+                ParseResult::Csharp(parsed_classes) => {
+                    let mut lock = context.classes.write().await;
+                    let diff = lock
+                        .par_iter()
+                        .filter(|c| c.index().0 == path && !parsed_classes.contains(c))
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    for class in parsed_classes {
+                        lock.insert(Arc::new(class));
+                    }
+
+                    for class in diff {
+                        lock.remove(&class);
+                    }
+                }
+                _ => {
+                    tracing::warn!("Failed to parse file: {}.", path.display());
+                }
+            }
+        }
+        "yml" | "yaml" => {
+            let result = crate::parse::yaml::parse(path, context.parsed_files.clone(), context.cache.clone()).await;
+            match result {
+                ParseResult::YamlPrototypes(parsed_prototypes) => {
+                    let mut lock = context.prototypes.write().await;
+                    let diff = lock
+                        .par_iter()
+                        .filter(|p| p.index().0 == path && !parsed_prototypes.contains(p))
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    for proto in parsed_prototypes {
+                        lock.insert(Arc::new(proto));
+                    }
+
+                    for proto in diff {
+                        lock.remove(&proto);
+                    }
+                }
+                _ => {
+                    tracing::warn!("Failed to parse file: {}.", path.display());
+                }
+            }
+        }
+        _ => {}
+    }
+
+    context.cache.write().await.write().await;
+}
+
+pub async fn update_tree(
+    language: &tree_sitter::Language,
+    new_content: &str,
+    tree: Arc<Mutex<tree_sitter::Tree>>,
+    rope: Arc<RwLock<Rope>>,
+) -> Option<OpenedFile> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(language).expect("unable to set tree-sitter language");
+
+    let new_tree = parser.parse(new_content, Some(&*tree.lock().await));
+
+    if let Some(new_tree) = new_tree {
+        let tree = Arc::new(Mutex::new(new_tree));
+        let rope = Arc::clone(&rope);
+        let opened_file = OpenedFile {
+            rope,
+            tree: Arc::clone(&tree),
+        };
+        Some(opened_file)
+    }
+    else {
+        None
+    }
+}
+
+pub async fn save_into_cache(
+    url: Url,
+    opened_files: OpenedFiles,
+    parsed_files: ParsedFiles,
+    tree: Arc<Mutex<tree_sitter::Tree>>,
+    opened_file: OpenedFile,
+) {
+    opened_files.write().await.insert(url.clone(), opened_file);
+    parsed_files.write().await.insert(url.to_file_path().unwrap_or_default(), tree);
 }

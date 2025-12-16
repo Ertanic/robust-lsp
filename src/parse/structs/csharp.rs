@@ -209,6 +209,10 @@ impl Prototype {
             name
         }
     }
+
+    pub fn class(&self) -> Arc<CsharpObject> {
+        self.class.clone()
+    }
 }
 
 impl TryFrom<Arc<CsharpObject>> for Prototype {

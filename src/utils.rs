@@ -448,3 +448,18 @@ pub async fn save_into_cache(
     opened_files.write().await.insert(url.clone(), opened_file);
     parsed_files.write().await.insert(url.to_file_path().unwrap_or_default(), tree);
 }
+
+pub fn extract_list_type(typename: &str) -> String {
+    let len = typename.len() - 1;
+    if typename.starts_with("List<") {
+        typename[5..len].to_string()
+    }
+    else if typename.starts_with("HashSet<") {
+        typename[9..len].to_string()
+    }
+    else if typename.starts_with("Dictionaty<") {
+        typename[12..len].to_string()
+    } else {
+        typename.to_string()
+    }
+}

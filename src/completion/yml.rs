@@ -5,7 +5,7 @@ use crate::{
         csharp::{Component, CsharpClassField, Prototype, ReflectionManager},
         json::RsiMeta,
     },
-    utils::get_columns,
+    utils::{extract_list_type, get_columns},
 };
 use rayon::prelude::*;
 use ropey::Rope;
@@ -62,7 +62,7 @@ impl Completion for YamlCompletion {
         match found_node.kind() {
             "block_mapping_pair" => self.block_mapping_pair(found_node).await,
             "block_mapping" => self.block_mapping(found_node).await,
-            "block_sequence_item" => self.block_sequence_item(found_node),
+            "block_sequence_item" => self.block_sequence_item(found_node).await,
             "block_sequence" => {
                 let block_mapping = self.find_block_mapping(found_node)?;
                 self.block_mapping(block_mapping).await
@@ -246,14 +246,84 @@ impl YamlCompletion {
         }
     }
 
-    fn block_sequence_item(&self, node: Node) -> CompletionResult {
+    async fn block_sequence_item<'a>(&'a self, node: Node<'a>) -> CompletionResult {
         debug_assert_eq!(node.kind(), "block_sequence_item");
 
-        if self.get_nesting(&node) > 4 {
-            None
+        let nesting = self.get_nesting(&node);
+        if nesting > 4 {
+            return None;
         }
-        else {
-            Some(CompletionResponse::Array(vec![CompletionItem {
+
+        tracing::info!("block_sequence_item nesting: {nesting}");
+
+        match nesting {
+            3 => {
+                let parent_node = self.get_parent_block_mapping_pair(node)?;
+                let proto_name = self
+                    .get_field(&parent_node.parent()?, "type")?
+                    .child_by_field_name("value")?
+                    .utf8_text(self.src.as_bytes())
+                    .ok()?;
+                let reflection = ReflectionManager::new(self.context.classes.clone());
+                let proto = reflection.get_prototype_by_name(proto_name).await?;
+                let parent_node_name = parent_node.child_by_field_name("key")?.utf8_text(self.src.as_bytes()).ok()?;
+                let fields = reflection.get_fields(proto.class()).await;
+                let field = fields.iter().find(|c| c.name.to_lowercase() == parent_node_name)?;
+                let type_name = extract_list_type(&field.type_name);
+
+                tracing::trace!("type_name: {type_name}");
+
+                if type_name.starts_with("ProtoId<") {
+                    let type_name = type_name[8..type_name.len() - 1].to_string();
+                    let type_name = reflection.get_prototype_by_name(type_name).await?.get_prototype_name();
+                    let type_name = stringcase::camel_case(&type_name);
+
+                    tracing::trace!("type_name: {type_name}");
+
+                    let completion = self
+                        .context
+                        .prototypes
+                        .read()
+                        .await
+                        .iter()
+                        .filter_map(|p| {
+                            if p.prototype == type_name {
+                                Some(CompletionItem {
+                                    label: p.id.clone(),
+                                    kind: Some(CompletionItemKind::CLASS),
+                                    detail: Some(type_name.clone()),
+                                    ..Default::default()
+                                })
+                            }
+                            else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    tracing::trace!("completion: {completion:?}");
+
+                    return Some(CompletionResponse::Array(completion));
+                }
+
+                Some(CompletionResponse::Array(vec![CompletionItem {
+                    label: "type".to_owned(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some("string".to_owned()),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: {
+                            let position = Position::new(self.position.line, node.start_position().column as u32 + 2);
+                            lsp_types::Range {
+                                start: position,
+                                end: position,
+                            }
+                        },
+                        new_text: "type:".to_string(),
+                    })),
+                    ..Default::default()
+                }]))
+            }
+            _ => Some(CompletionResponse::Array(vec![CompletionItem {
                 label: "type".to_owned(),
                 kind: Some(CompletionItemKind::FIELD),
                 detail: Some("string".to_owned()),
@@ -268,7 +338,7 @@ impl YamlCompletion {
                     new_text: "type:".to_string(),
                 })),
                 ..Default::default()
-            }]))
+            }])),
         }
     }
 
@@ -1255,5 +1325,16 @@ impl YamlCompletion {
         };
 
         Some(CompletionResponse::List(CompletionList { is_incomplete: true, items }))
+    }
+
+    fn get_parent_block_mapping_pair<'a>(&'a self, node: Node<'a>) -> Option<Node<'a>> {
+        let mut node = node;
+        while let Some(parent) = node.parent() {
+            if parent.kind() == "block_mapping_pair" {
+                return Some(parent);
+            }
+            node = parent;
+        }
+        None
     }
 }

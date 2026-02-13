@@ -19,7 +19,7 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:{SpaceStation14.sln,**/RobustToolbox.sln}"
+    "workspaceContains:{SpaceStation14.sln,**/RobustToolbox.sln}{,x}"
   ],
   "main": "./out/extension.js",
   "scripts": {
